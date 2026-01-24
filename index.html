@@ -13,7 +13,7 @@
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Tahoma, Arial; background:var(--bg); color:var(--txt); }
     header { padding:14px; border-bottom:1px solid var(--bd); display:flex; justify-content:space-between; gap:10px; align-items:center; }
     header h1 { margin:0; font-size:16px; }
-    header .mut { margin:0; color:var(--mut); font-size:12px; line-height:1.4; }
+    header .mut { margin:0; color:var(--mut); font-size:12px; }
     .wrap { padding:10px; display:grid; gap:10px; }
     #map { height: 60vh; border:1px solid var(--bd); border-radius:14px; overflow:hidden; }
     .card { background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:12px; }
@@ -29,7 +29,7 @@
     .list { display:grid; gap:8px; margin-top:10px; }
     .item { border:1px solid var(--bd); border-radius:14px; padding:10px; background:rgba(255,255,255,0.02); }
     .item .top { display:flex; justify-content:space-between; gap:10px; }
-    a.link { color:var(--mut); text-decoration:none; font-size:12px; }
+    a.link { color:var(--mut); text-decoration:none; }
   </style>
 </head>
 
@@ -37,11 +37,11 @@
 <header>
   <div>
     <h1>أقرب جهاز بصمة</h1>
-    <p class="mut">حدّد موقعك لعرض أقرب جهاز مع المسافة وزر الاتجاهات.</p>
+    <p class="mut">حدّد موقعك ليتم عرض أقرب جهاز مع المسافة وزر الاتجاهات.</p>
   </div>
   <div>
-    <!-- رابط الإدارة (ممكن تخليه، أو تشيله) -->
-    <a class="link" href="admin.html" title="للإدارة فقط">⚙️ إدارة</a>
+    <!-- رابط إدارة مخفي/بسيط (اختياري) -->
+    <a class="link" href="admin.html" title="للإدارة فقط">⚙️</a>
   </div>
 </header>
 
@@ -51,7 +51,6 @@
       <button class="primary" id="btnLocate">📍 حدد موقعي</button>
       <button id="btnPickMyPos">🖐️ اختيار موقعي يدويًا</button>
       <button id="btnCenter">🧭 توسيط الخريطة</button>
-      <button id="btnReload">🔄 تحديث الأجهزة</button>
     </div>
     <div class="hint" id="status" style="margin-top:8px">جاهز.</div>
   </div>
@@ -60,7 +59,7 @@
 
   <div class="card">
     <div class="big">أقرب جهاز</div>
-    <div id="nearestBox" class="hint" style="margin-top:6px">جارِ تحميل الأجهزة...</div>
+    <div id="nearestBox" class="hint" style="margin-top:6px">أضف الأجهزة من صفحة الإدارة ثم حدّد موقعك هنا.</div>
   </div>
 
   <div class="card">
@@ -73,29 +72,7 @@
 <script>
   const STORAGE_KEY = "biometric_devices_v1";
 
-  async function loadDevices() {
-    // المصدر الأساسي: devices.json (مشترك لكل الموظفين)
-    try {
-      const res = await fetch("devices.json", { cache: "no-store" });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const normalized = data.map(d => ({
-            id: d.id ?? crypto.randomUUID(),
-            name: String(d.name ?? "").trim(),
-            area: String(d.area ?? "").trim(),
-            lat: Number(d.lat),
-            lng: Number(d.lng),
-          })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
-
-          // نخزن نسخة محلية كـ fallback
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized, null, 2));
-          return normalized;
-        }
-      }
-    } catch {}
-
-    // fallback: localStorage
+  function loadDevices() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
@@ -108,9 +85,7 @@
         lat: Number(d.lat),
         lng: Number(d.lng),
       })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
 
   function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -139,11 +114,7 @@
     el.textContent = msg;
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  }
-
-  let devices = [];
+  let devices = loadDevices();
   let myPos = null;
   let myMarker = null;
   let pickMode = null;
@@ -151,11 +122,12 @@
 
   const map = L.map('map').setView([33.3152, 44.3661], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
   const deviceLayer = L.layerGroup().addTo(map);
 
-  async function renderMarkers() {
+  function renderMarkers() {
     deviceLayer.clearLayers();
-    devices = await loadDevices();
+    devices = loadDevices();
 
     devices.forEach(d => {
       const marker = L.marker([d.lat, d.lng]).addTo(deviceLayer);
@@ -182,6 +154,10 @@
     renderListAndNearest();
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
   function computeDistances() {
     return devices.map(d => {
       const dist = myPos ? haversineMeters(myPos.lat, myPos.lng, d.lat, d.lng) : Infinity;
@@ -194,7 +170,7 @@
     list.innerHTML = "";
 
     if (!devices.length) {
-      list.innerHTML = `<div class="hint">لا توجد أجهزة بعد. اطلب من المدير إضافة الأجهزة.</div>`;
+      list.innerHTML = `<div class="hint">لا توجد أجهزة. اطلب من المدير إضافتها من صفحة الإدارة.</div>`;
       document.getElementById("nearestBox").textContent = "لا توجد أجهزة بعد.";
       return;
     }
@@ -261,7 +237,8 @@
       pos => {
         myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setStatus("تم تحديد موقعك.", "ok");
-        renderMarkers().then(centerMap);
+        renderMarkers();
+        centerMap();
       },
       _ => setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger"),
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
@@ -275,11 +252,6 @@
     setStatus("اضغط على الخريطة لتحديد موقعك يدويًا.", "warn");
   };
 
-  document.getElementById("btnReload").onclick = () => {
-    setStatus("جاري تحديث الأجهزة...", "warn");
-    renderMarkers().then(() => setStatus("تم تحديث الأجهزة.", "ok"));
-  };
-
   map.on("click", (e) => {
     if (pickMode !== "mypos") return;
     const { lat, lng } = e.latlng;
@@ -291,6 +263,7 @@
     renderMarkers();
   });
 
+  // popup actions
   window.__goTo = (id) => {
     const d = devices.find(x => x.id === id);
     if (!d) return;
@@ -315,12 +288,8 @@
     if (zoomId) window.__zoomTo(id);
   };
 
-  // init
-  setStatus("جارِ تحميل الأجهزة...", "warn");
-  renderMarkers().then(() => {
-    setStatus("جاهز.", "ok");
-    centerMap();
-  });
+  renderMarkers();
+  centerMap();
 </script>
 </body>
 </html>
