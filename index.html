@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>أقرب جهاز بصمة</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    :root { --bg:#0b1220; --card:#111a2e; --txt:#e8eefc; --mut:#aab6d6; --bd:#223055; --btn:#2b62ff; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Tahoma, Arial; background:var(--bg); color:var(--txt); }
+    header { padding:14px; border-bottom:1px solid var(--bd); display:flex; justify-content:space-between; gap:10px; align-items:center; }
+    header h1 { margin:0; font-size:16px; }
+    header .mut { margin:0; color:var(--mut); font-size:12px; line-height:1.4; }
+    .wrap { padding:10px; display:grid; gap:10px; }
+    #map { height: 60vh; border:1px solid var(--bd); border-radius:14px; overflow:hidden; }
+    .card { background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    button {
+      border:1px solid var(--bd); background:var(--card); color:var(--txt);
+      padding:11px 12px; border-radius:12px; font-size:14px; cursor:pointer;
+    }
+    button.primary { background:var(--btn); border-color:transparent; }
+    .hint { color:var(--mut); font-size:12px; line-height:1.5; }
+    .ok { color:#79ffa6; } .warn { color:#ffcb6b; } .danger { color:#ff7a7a; }
+    .big { font-size:15px; font-weight:700; }
+    .list { display:grid; gap:8px; margin-top:10px; }
+    .item { border:1px solid var(--bd); border-radius:14px; padding:10px; background:rgba(255,255,255,0.02); }
+    .item .top { display:flex; justify-content:space-between; gap:10px; }
+    a.link { color:var(--mut); text-decoration:none; font-size:12px; }
+  </style>
+</head>
+
+<body>
+<header>
+  <div>
+    <h1>أقرب جهاز بصمة</h1>
+    <p class="mut">حدّد موقعك لعرض أقرب جهاز مع المسافة وزر الاتجاهات.</p>
+  </div>
+  <div>
+    <!-- رابط الإدارة (ممكن تخليه، أو تشيله) -->
+    <a class="link" href="admin.html" title="للإدارة فقط">⚙️ إدارة</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <button class="primary" id="btnLocate">📍 حدد موقعي</button>
+      <button id="btnPickMyPos">🖐️ اختيار موقعي يدويًا</button>
+      <button id="btnCenter">🧭 توسيط الخريطة</button>
+      <button id="btnReload">🔄 تحديث الأجهزة</button>
+    </div>
+    <div class="hint" id="status" style="margin-top:8px">جاهز.</div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="card">
+    <div class="big">أقرب جهاز</div>
+    <div id="nearestBox" class="hint" style="margin-top:6px">جارِ تحميل الأجهزة...</div>
+  </div>
+
+  <div class="card">
+    <div class="big">الأجهزة الأقرب</div>
+    <div class="hint">قائمة مرتبة حسب المسافة (بعد تحديد موقعك).</div>
+    <div class="list" id="deviceList"></div>
+  </div>
+</div>
+
+<script>
+  const STORAGE_KEY = "biometric_devices_v1";
+
+  async function loadDevices() {
+    // المصدر الأساسي: devices.json (مشترك لكل الموظفين)
+    try {
+      const res = await fetch("devices.json", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const normalized = data.map(d => ({
+            id: d.id ?? crypto.randomUUID(),
+            name: String(d.name ?? "").trim(),
+            area: String(d.area ?? "").trim(),
+            lat: Number(d.lat),
+            lng: Number(d.lng),
+          })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+
+          // نخزن نسخة محلية كـ fallback
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized, null, 2));
+          return normalized;
+        }
+      }
+    } catch {}
+
+    // fallback: localStorage
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data.map(d => ({
+        id: d.id ?? crypto.randomUUID(),
+        name: String(d.name ?? "").trim(),
+        area: String(d.area ?? "").trim(),
+        lat: Number(d.lat),
+        lng: Number(d.lng),
+      })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+    } catch {
+      return [];
+    }
+  }
+
+  function haversineMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toRad = d => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  function fmtDistance(m) {
+    if (!isFinite(m)) return "-";
+    if (m < 1000) return `${Math.round(m)} م`;
+    return `${(m/1000).toFixed(2)} كم`;
+  }
+
+  function openGoogleMapsRoute(fromLat, fromLng, toLat, toLng) {
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${fromLat},${fromLng}&destination=${toLat},${toLng}&travelmode=walking`;
+    window.open(url, "_blank");
+  }
+
+  function setStatus(msg, cls="") {
+    const el = document.getElementById("status");
+    el.className = "hint " + cls;
+    el.textContent = msg;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  let devices = [];
+  let myPos = null;
+  let myMarker = null;
+  let pickMode = null;
+  let tempPickMarker = null;
+
+  const map = L.map('map').setView([33.3152, 44.3661], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const deviceLayer = L.layerGroup().addTo(map);
+
+  async function renderMarkers() {
+    deviceLayer.clearLayers();
+    devices = await loadDevices();
+
+    devices.forEach(d => {
+      const marker = L.marker([d.lat, d.lng]).addTo(deviceLayer);
+      const popupHtml = `
+        <div style="min-width:190px">
+          <div style="font-weight:800; margin-bottom:4px">${escapeHtml(d.name)}</div>
+          <div style="font-size:12px; opacity:.85; margin-bottom:8px">${escapeHtml(d.area || "")}</div>
+          <button onclick="window.__goTo('${d.id}')" style="padding:6px 10px; border-radius:10px; border:1px solid #223055; background:#2b62ff; color:#e8eefc; cursor:pointer">اذهب</button>
+          <button onclick="window.__zoomTo('${d.id}')" style="padding:6px 10px; border-radius:10px; border:1px solid #223055; background:transparent; color:#e8eefc; cursor:pointer; margin-inline-start:6px">عرض</button>
+        </div>
+      `;
+      marker.bindPopup(popupHtml);
+    });
+
+    if (myPos) {
+      if (!myMarker) {
+        myMarker = L.circleMarker([myPos.lat, myPos.lng], { radius: 9 }).addTo(map);
+        myMarker.bindPopup("موقعي الحالي");
+      } else {
+        myMarker.setLatLng([myPos.lat, myPos.lng]);
+      }
+    }
+
+    renderListAndNearest();
+  }
+
+  function computeDistances() {
+    return devices.map(d => {
+      const dist = myPos ? haversineMeters(myPos.lat, myPos.lng, d.lat, d.lng) : Infinity;
+      return { ...d, dist };
+    }).sort((a,b) => a.dist - b.dist);
+  }
+
+  function renderListAndNearest() {
+    const list = document.getElementById("deviceList");
+    list.innerHTML = "";
+
+    if (!devices.length) {
+      list.innerHTML = `<div class="hint">لا توجد أجهزة بعد. اطلب من المدير إضافة الأجهزة.</div>`;
+      document.getElementById("nearestBox").textContent = "لا توجد أجهزة بعد.";
+      return;
+    }
+
+    const data = computeDistances();
+
+    data.slice(0, 10).forEach(d => {
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div class="top">
+          <div>
+            <div style="font-weight:800">${escapeHtml(d.name)}</div>
+            <div class="hint">${escapeHtml(d.area || "")}</div>
+          </div>
+          <div style="text-align:left">
+            <div style="font-weight:900">${myPos ? fmtDistance(d.dist) : "-"}</div>
+            <div class="hint">المسافة</div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" data-go="${d.id}">🧭 اذهب</button>
+          <button data-zoom="${d.id}">🔎 عرض</button>
+        </div>
+      `;
+      list.appendChild(div);
+    });
+
+    const nearestBox = document.getElementById("nearestBox");
+    if (!myPos) {
+      nearestBox.textContent = "اضغط “حدد موقعي” لعرض الأقرب.";
+      return;
+    }
+    const nearest = data[0];
+    nearestBox.innerHTML = `
+      <div style="font-weight:900; font-size:15px">${escapeHtml(nearest.name)}</div>
+      <div class="hint">${escapeHtml(nearest.area || "")}</div>
+      <div style="margin-top:6px">المسافة: <b>${fmtDistance(nearest.dist)}</b></div>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="btnGoNearest">🧭 افتح المسار</button>
+        <button id="btnZoomNearest">🔎 عرض على الخريطة</button>
+      </div>
+    `;
+    document.getElementById("btnGoNearest").onclick = () => openGoogleMapsRoute(myPos.lat, myPos.lng, nearest.lat, nearest.lng);
+    document.getElementById("btnZoomNearest").onclick = () => map.setView([nearest.lat, nearest.lng], 17);
+  }
+
+  function centerMap() {
+    if (devices.length) {
+      const bounds = L.latLngBounds(devices.map(d => [d.lat, d.lng]));
+      if (myPos) bounds.extend([myPos.lat, myPos.lng]);
+      map.fitBounds(bounds.pad(0.25));
+    } else if (myPos) {
+      map.setView([myPos.lat, myPos.lng], 15);
+    } else {
+      map.setView([33.3152, 44.3661], 12);
+    }
+  }
+
+  document.getElementById("btnLocate").onclick = () => {
+    if (!navigator.geolocation) { setStatus("المتصفح لا يدعم تحديد الموقع.", "danger"); return; }
+    setStatus("جاري تحديد الموقع...", "warn");
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setStatus("تم تحديد موقعك.", "ok");
+        renderMarkers().then(centerMap);
+      },
+      _ => setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger"),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
+    );
+  };
+
+  document.getElementById("btnCenter").onclick = centerMap;
+
+  document.getElementById("btnPickMyPos").onclick = () => {
+    pickMode = "mypos";
+    setStatus("اضغط على الخريطة لتحديد موقعك يدويًا.", "warn");
+  };
+
+  document.getElementById("btnReload").onclick = () => {
+    setStatus("جاري تحديث الأجهزة...", "warn");
+    renderMarkers().then(() => setStatus("تم تحديث الأجهزة.", "ok"));
+  };
+
+  map.on("click", (e) => {
+    if (pickMode !== "mypos") return;
+    const { lat, lng } = e.latlng;
+    if (tempPickMarker) map.removeLayer(tempPickMarker);
+    tempPickMarker = L.marker([lat, lng]).addTo(map);
+    myPos = { lat, lng };
+    setStatus("تم تحديد موقعك يدويًا.", "ok");
+    pickMode = null;
+    renderMarkers();
+  });
+
+  window.__goTo = (id) => {
+    const d = devices.find(x => x.id === id);
+    if (!d) return;
+    if (!myPos) { setStatus("حدد موقعك أولاً.", "warn"); return; }
+    openGoogleMapsRoute(myPos.lat, myPos.lng, d.lat, d.lng);
+  };
+  window.__zoomTo = (id) => {
+    const d = devices.find(x => x.id === id);
+    if (!d) return;
+    map.setView([d.lat, d.lng], 17);
+  };
+
+  document.getElementById("deviceList").onclick = (ev) => {
+    const btn = ev.target.closest("button");
+    if (!btn) return;
+    const goId = btn.getAttribute("data-go");
+    const zoomId = btn.getAttribute("data-zoom");
+    const id = goId || zoomId;
+    const d = devices.find(x => x.id === id);
+    if (!d) return;
+    if (goId) window.__goTo(id);
+    if (zoomId) window.__zoomTo(id);
+  };
+
+  // init
+  setStatus("جارِ تحميل الأجهزة...", "warn");
+  renderMarkers().then(() => {
+    setStatus("جاهز.", "ok");
+    centerMap();
+  });
+</script>
+</body>
+</html>

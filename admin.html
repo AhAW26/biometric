@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>إدارة أجهزة البصمة</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    :root { --bg:#0b1220; --card:#111a2e; --txt:#e8eefc; --mut:#aab6d6; --bd:#223055; --btn:#2b62ff; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Tahoma, Arial; background:var(--bg); color:var(--txt); }
+    header { padding:14px; border-bottom:1px solid var(--bd); display:flex; justify-content:space-between; gap:10px; align-items:center; }
+    header h1 { margin:0; font-size:16px; }
+    header a { color:var(--mut); text-decoration:none; font-size:12px; }
+    .wrap { display:grid; grid-template-columns: 1fr; gap:10px; padding:10px; }
+    #map { height: 46vh; border:1px solid var(--bd); border-radius:14px; overflow:hidden; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    button, input, textarea {
+      border:1px solid var(--bd); background:var(--card); color:var(--txt);
+      padding:10px 12px; border-radius:12px; font-size:13px;
+    }
+    button { cursor:pointer; }
+    button.primary { background:var(--btn); border-color:transparent; }
+    button.ghost { background:transparent; }
+    .card { background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:10px; }
+    .card h2 { margin:0 0 8px; font-size:14px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:8px; }
+    .mut { color:var(--mut); font-size:12px; }
+    .list { display:grid; gap:8px; margin-top:8px; }
+    .item { border:1px solid var(--bd); border-radius:14px; padding:10px; background:rgba(255,255,255,0.02); }
+    .two { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    textarea { min-height:70px; resize:vertical; }
+    .ok { color:#79ffa6; } .warn { color:#ffcb6b; } .danger { color:#ff7a7a; }
+
+    /* Lock screen */
+    #lockScreen {
+      position:fixed; inset:0; background:rgba(0,0,0,0.65);
+      display:flex; align-items:center; justify-content:center; padding:14px; z-index:9999;
+    }
+    #lockCard {
+      width:min(420px, 100%); background:var(--card); border:1px solid var(--bd);
+      border-radius:16px; padding:14px;
+    }
+    #lockCard h3 { margin:0 0 8px; font-size:15px; }
+    #lockCard .mut { line-height:1.5; }
+    @media (min-width: 980px) {
+      .wrap { grid-template-columns: 1.2fr 0.8fr; align-items:start; }
+      #map { height: calc(100vh - 130px); }
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- شاشة القفل -->
+<div id="lockScreen">
+  <div id="lockCard">
+    <h3>🔐 دخول الإدارة</h3>
+    <div class="mut">أدخل كلمة السر لفتح لوحة إدارة أجهزة البصمة.</div>
+    <div class="grid" style="margin-top:10px">
+      <input id="pw" type="password" placeholder="كلمة السر" autocomplete="current-password" />
+      <div class="row">
+        <button class="primary" id="btnUnlock">فتح</button>
+        <button class="ghost" id="btnBack">العودة للموظف</button>
+      </div>
+      <div id="lockMsg" class="mut"></div>
+    </div>
+  </div>
+</div>
+
+<header>
+  <h1>إدارة أجهزة البصمة</h1>
+  <div class="row">
+    <a href="index.html">⬅️ واجهة الموظف</a>
+    <button class="ghost" id="btnLogout" title="تسجيل خروج الإدارة">خروج</button>
+  </div>
+</header>
+
+<div class="wrap" id="adminApp" style="display:none">
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      <button class="ghost" id="btnCenter">🧭 توسيط الخريطة</button>
+      <button class="primary" id="btnPickOnMap">📌 اختر موقع الجهاز على الخريطة</button>
+      <button class="ghost" id="btnReload">🔄 إعادة تحميل من devices.json</button>
+    </div>
+    <div id="map"></div>
+    <div class="mut" id="status" style="margin-top:10px">جاهز.</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>إضافة / تعديل جهاز</h2>
+      <div class="grid">
+        <input id="devName" placeholder="اسم الجهاز (مثال: بصمة المدخل الرئيسي)" />
+        <input id="devArea" placeholder="المنطقة/العنوان المختصر (اختياري)" />
+        <div class="two">
+          <input id="devLat" placeholder="Latitude" inputmode="decimal" />
+          <input id="devLng" placeholder="Longitude" inputmode="decimal" />
+        </div>
+        <div class="row">
+          <button class="primary" id="btnSave">💾 حفظ</button>
+          <button class="ghost" id="btnClear">مسح الحقول</button>
+        </div>
+        <div class="mut">لتحديد الموقع: اضغط “اختر موقع الجهاز على الخريطة” ثم انقر على الخريطة.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>قائمة الأجهزة</h2>
+      <div class="list" id="deviceList"></div>
+    </div>
+
+    <div class="card">
+      <h2>تصدير / استيراد</h2>
+      <div class="grid">
+        <div class="row">
+          <button id="btnExport" class="primary">⬇️ تصدير devices.json</button>
+          <button id="btnImport">⬆️ استيراد JSON</button>
+          <input type="file" id="fileImport" accept="application/json" style="display:none" />
+        </div>
+        <textarea id="jsonBox" placeholder="سيظهر JSON هنا عند التصدير، أو الصقه هنا ثم اضغط استيراد."></textarea>
+        <button class="ghost" id="btnReset">🗑️ مسح كل الأجهزة (محليًا)</button>
+        <div class="mut warn">
+          بعد التعديل اضغط <b>تصدير devices.json</b> ثم ارفع الملف إلى GitHub ليظهر للجميع.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* ========= Admin Password Gate =========
+     غيّر كلمة السر عبر تغيير ADMIN_PASSWORD_PLAINTEXT ثم انسخ هاشها من console أو استخدم نفس الكلمة الافتراضية.
+     (هذه حماية واجهة فقط وليست أمان سيرفر)
+  */
+
+  const SESSION_KEY = "admin_unlocked_v1";
+
+  // ✅ كلمة السر الافتراضية (غيّرها كما تريد)
+  const ADMIN_PASSWORD_PLAINTEXT = "AZrm#*@2025";
+
+  async function sha256Hex(text) {
+    const enc = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", enc);
+    const bytes = Array.from(new Uint8Array(digest));
+    return bytes.map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  // نخزن هاش كلمة السر (مشتق من النص أعلاه) حتى يكون التحقق بالهاش
+  let ADMIN_PASSWORD_HASH = null;
+
+  async function initPasswordHash() {
+    ADMIN_PASSWORD_HASH = await sha256Hex(ADMIN_PASSWORD_PLAINTEXT);
+  }
+
+  async function unlockWithPassword(pw) {
+    const hash = await sha256Hex(pw);
+    return hash === ADMIN_PASSWORD_HASH;
+  }
+
+  function showLocked(msg="") {
+    document.getElementById("lockScreen").style.display = "flex";
+    document.getElementById("adminApp").style.display = "none";
+    document.getElementById("lockMsg").textContent = msg;
+  }
+
+  function showUnlocked() {
+    document.getElementById("lockScreen").style.display = "none";
+    document.getElementById("adminApp").style.display = "grid";
+  }
+
+  document.getElementById("btnBack").onclick = () => location.href = "index.html";
+  document.getElementById("btnLogout").onclick = () => {
+    sessionStorage.removeItem(SESSION_KEY);
+    showLocked("تم تسجيل الخروج.");
+  };
+
+  document.getElementById("btnUnlock").onclick = async () => {
+    const pw = document.getElementById("pw").value || "";
+    const ok = await unlockWithPassword(pw);
+    if (!ok) {
+      showLocked("كلمة السر غير صحيحة.");
+      return;
+    }
+    sessionStorage.setItem(SESSION_KEY, "1");
+    showUnlocked();
+    // بعد الفتح: شغل التطبيق
+    await bootAdmin();
+  };
+
+  /* ========= Admin App ========= */
+  const STORAGE_KEY = "biometric_devices_v1";
+
+  async function loadDevicesFromJson() {
+    try {
+      const res = await fetch("devices.json", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const normalized = data.map(d => ({
+            id: d.id ?? crypto.randomUUID(),
+            name: String(d.name ?? "").trim(),
+            area: String(d.area ?? "").trim(),
+            lat: Number(d.lat),
+            lng: Number(d.lng),
+          })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized, null, 2));
+          return normalized;
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  function loadDevicesLocal() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data.map(d => ({
+        id: d.id ?? crypto.randomUUID(),
+        name: String(d.name ?? "").trim(),
+        area: String(d.area ?? "").trim(),
+        lat: Number(d.lat),
+        lng: Number(d.lng),
+      })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+    } catch { return []; }
+  }
+
+  function saveDevicesLocal(devs) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(devs, null, 2));
+  }
+
+  function safeParseFloat(x) {
+    const v = parseFloat(String(x).trim());
+    return Number.isFinite(v) ? v : null;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+  function setStatus(msg, cls="mut") {
+    const el = document.getElementById("status");
+    el.className = cls;
+    el.textContent = msg;
+  }
+
+  let devices = [];
+  let editingId = null;
+  let pickMode = false;
+  let tempPickMarker = null;
+
+  let map, deviceLayer;
+
+  async function bootAdmin() {
+    // منع إعادة التهيئة
+    if (map) { return; }
+
+    devices = loadDevicesLocal();
+    if (!devices.length) devices = await loadDevicesFromJson();
+
+    map = L.map('map').setView([33.3152, 44.3661], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    deviceLayer = L.layerGroup().addTo(map);
+
+    document.getElementById("btnPickOnMap").onclick = () => {
+      pickMode = true;
+      setStatus("اضغط على الخريطة لتثبيت موقع الجهاز.", "warn");
+    };
+
+    map.on("click", (e) => {
+      if (!pickMode) return;
+      const { lat, lng } = e.latlng;
+      if (tempPickMarker) map.removeLayer(tempPickMarker);
+      tempPickMarker = L.marker([lat, lng]).addTo(map);
+      document.getElementById("devLat").value = lat.toFixed(6);
+      document.getElementById("devLng").value = lng.toFixed(6);
+      pickMode = false;
+      setStatus("تم اختيار الموقع. اكتب الاسم ثم اضغط حفظ.", "ok");
+    });
+
+    document.getElementById("btnSave").onclick = () => {
+      const name = document.getElementById("devName").value.trim();
+      const area = document.getElementById("devArea").value.trim();
+      const lat = safeParseFloat(document.getElementById("devLat").value);
+      const lng = safeParseFloat(document.getElementById("devLng").value);
+
+      if (!name) { setStatus("اكتب اسم الجهاز.", "danger"); return; }
+      if (lat === null || lng === null) { setStatus("حدد موقع الجهاز أو أدخل Lat/Lng صحيح.", "danger"); return; }
+
+      if (editingId) {
+        const idx = devices.findIndex(d => d.id === editingId);
+        if (idx >= 0) devices[idx] = { id: editingId, name, area, lat, lng };
+        setStatus("تم تحديث الجهاز.", "ok");
+      } else {
+        devices.push({ id: crypto.randomUUID(), name, area, lat, lng });
+        setStatus("تمت إضافة الجهاز.", "ok");
+      }
+
+      saveDevicesLocal(devices);
+      clearForm();
+      renderMarkers();
+      centerMap();
+    };
+
+    document.getElementById("btnClear").onclick = () => { clearForm(); setStatus("تم مسح الحقول.", "mut"); };
+    document.getElementById("btnCenter").onclick = centerMap;
+
+    document.getElementById("btnReload").onclick = async () => {
+      setStatus("جاري إعادة التحميل من devices.json ...", "warn");
+      devices = await loadDevicesFromJson();
+      saveDevicesLocal(devices);
+      renderMarkers();
+      centerMap();
+      setStatus("تمت إعادة التحميل.", "ok");
+    };
+
+    document.getElementById("deviceList").onclick = (ev) => {
+      const btn = ev.target.closest("button");
+      if (!btn) return;
+      const zoomId = btn.getAttribute("data-zoom");
+      const editId = btn.getAttribute("data-edit");
+      const delId = btn.getAttribute("data-del");
+      const id = zoomId || editId || delId;
+      const d = devices.find(x => x.id === id);
+      if (!d) return;
+
+      if (zoomId) map.setView([d.lat, d.lng], 17);
+      if (editId) editDevice(id);
+      if (delId) deleteDevice(id);
+    };
+
+    // Export / Import
+    document.getElementById("btnExport").onclick = () => {
+      const json = JSON.stringify(devices, null, 2);
+      document.getElementById("jsonBox").value = json;
+
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "devices.json";
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setStatus("تم التصدير. ارفع devices.json إلى GitHub.", "ok");
+    };
+
+    document.getElementById("btnImport").onclick = () => {
+      const box = document.getElementById("jsonBox").value.trim();
+      if (box) {
+        try {
+          const data = JSON.parse(box);
+          if (!Array.isArray(data)) throw new Error("not array");
+          devices = data.map(d => ({
+            id: d.id ?? crypto.randomUUID(),
+            name: String(d.name ?? "").trim(),
+            area: String(d.area ?? "").trim(),
+            lat: Number(d.lat),
+            lng: Number(d.lng),
+          })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+          saveDevicesLocal(devices);
+          renderMarkers();
+          centerMap();
+          setStatus("تم الاستيراد من النص.", "ok");
+          return;
+        } catch {
+          setStatus("JSON غير صالح. جرّب استيراد ملف.", "danger");
+          return;
+        }
+      }
+      document.getElementById("fileImport").click();
+    };
+
+    document.getElementById("fileImport").addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!Array.isArray(data)) throw new Error("not array");
+        devices = data.map(d => ({
+          id: d.id ?? crypto.randomUUID(),
+          name: String(d.name ?? "").trim(),
+          area: String(d.area ?? "").trim(),
+          lat: Number(d.lat),
+          lng: Number(d.lng),
+        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+        saveDevicesLocal(devices);
+        renderMarkers();
+        centerMap();
+        setStatus("تم الاستيراد من الملف.", "ok");
+      } catch {
+        setStatus("فشل الاستيراد. تأكد أن الملف JSON صحيح.", "danger");
+      } finally {
+        e.target.value = "";
+      }
+    });
+
+    document.getElementById("btnReset").onclick = () => {
+      if (!confirm("مسح كل الأجهزة محليًا؟")) return;
+      devices = [];
+      saveDevicesLocal(devices);
+      renderMarkers();
+      setStatus("تم المسح محليًا.", "ok");
+    };
+
+    renderMarkers();
+    centerMap();
+    setStatus("جاهز.", "ok");
+  }
+
+  function renderMarkers() {
+    deviceLayer.clearLayers();
+    devices.forEach(d => {
+      const marker = L.marker([d.lat, d.lng]).addTo(deviceLayer);
+      marker.bindPopup(`
+        <div style="min-width:180px">
+          <div style="font-weight:800; margin-bottom:4px">${escapeHtml(d.name)}</div>
+          <div style="font-size:12px; opacity:.85; margin-bottom:8px">${escapeHtml(d.area || "")}</div>
+          <button onclick="window.__edit('${d.id}')" style="padding:6px 10px; border-radius:10px; border:1px solid #223055; background:#111a2e; color:#e8eefc; cursor:pointer">تعديل</button>
+          <button onclick="window.__del('${d.id}')" style="padding:6px 10px; border-radius:10px; border:1px solid #223055; background:transparent; color:#e8eefc; cursor:pointer; margin-inline-start:6px">حذف</button>
+        </div>
+      `);
+    });
+    renderList();
+  }
+
+  function renderList() {
+    const list = document.getElementById("deviceList");
+    list.innerHTML = "";
+    if (!devices.length) {
+      list.innerHTML = `<div class="mut">لا توجد أجهزة بعد.</div>`;
+      return;
+    }
+    devices.forEach(d => {
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div style="font-weight:800">${escapeHtml(d.name)}</div>
+        <div class="mut">${escapeHtml(d.area || "")}</div>
+        <div class="mut">(${d.lat.toFixed(6)}, ${d.lng.toFixed(6)})</div>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" data-zoom="${d.id}">🔎 عرض</button>
+          <button class="ghost" data-edit="${d.id}">✏️ تعديل</button>
+          <button class="ghost" data-del="${d.id}">🗑️ حذف</button>
+        </div>
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  function centerMap() {
+    if (devices.length) {
+      const bounds = L.latLngBounds(devices.map(d => [d.lat, d.lng]));
+      map.fitBounds(bounds.pad(0.25));
+    } else {
+      map.setView([33.3152, 44.3661], 12);
+    }
+  }
+
+  function clearForm() {
+    document.getElementById("devName").value = "";
+    document.getElementById("devArea").value = "";
+    document.getElementById("devLat").value = "";
+    document.getElementById("devLng").value = "";
+    editingId = null;
+  }
+
+  function editDevice(id) {
+    const d = devices.find(x => x.id === id);
+    if (!d) return;
+    editingId = id;
+    document.getElementById("devName").value = d.name;
+    document.getElementById("devArea").value = d.area || "";
+    document.getElementById("devLat").value = d.lat;
+    document.getElementById("devLng").value = d.lng;
+    setStatus("وضع التعديل: عدّل ثم اضغط حفظ.", "warn");
+  }
+
+  function deleteDevice(id) {
+    const d = devices.find(x => x.id === id);
+    if (!d) return;
+    if (!confirm(`حذف الجهاز: ${d.name} ؟`)) return;
+    devices = devices.filter(x => x.id !== id);
+    saveDevicesLocal(devices);
+    renderMarkers();
+    setStatus("تم حذف الجهاز.", "ok");
+  }
+
+  window.__edit = editDevice;
+  window.__del = deleteDevice;
+
+  // ==== Start ====
+  (async () => {
+    await initPasswordHash();
+    const already = sessionStorage.getItem(SESSION_KEY) === "1";
+    if (already) {
+      showUnlocked();
+      await bootAdmin();
+    } else {
+      showLocked("");
+    }
+  })();
+</script>
+</body>
+</html>
