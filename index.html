@@ -30,14 +30,6 @@
     .item { border:1px solid var(--bd); border-radius:14px; padding:10px; background:rgba(255,255,255,0.02); }
     .item .top { display:flex; justify-content:space-between; gap:10px; }
     a.link { color:var(--mut); text-decoration:none; font-size:12px; }
-    .pill {
-      border:1px solid var(--bd);
-      background:rgba(255,255,255,0.03);
-      padding:6px 10px;
-      border-radius:999px;
-      font-size:12px;
-      color:var(--mut);
-    }
   </style>
 </head>
 
@@ -48,6 +40,7 @@
     <p class="mut">حدّد موقعك لعرض أقرب جهاز مع المسافة وزر الاتجاهات.</p>
   </div>
   <div>
+    <!-- رابط الإدارة (ممكن تخليه، أو تشيله) -->
     <a class="link" href="admin.html" title="للإدارة فقط">⚙️ إدارة</a>
   </div>
 </header>
@@ -56,9 +49,6 @@
   <div class="card">
     <div class="row">
       <button class="primary" id="btnLocate">📍 حدد موقعي</button>
-      <button id="btnRefreshLoc" style="display:none">📍 حدّث الموقع مرة أخرى</button>
-      <span class="pill" id="locAcc" style="display:none"></span>
-
       <button id="btnPickMyPos">🖐️ اختيار موقعي يدويًا</button>
       <button id="btnCenter">🧭 توسيط الخريطة</button>
       <button id="btnReload">🔄 تحديث الأجهزة</button>
@@ -83,15 +73,8 @@
 <script>
   const STORAGE_KEY = "biometric_devices_v1";
 
-  // ✅ دقة مطلوبة: 10 متر (أعلى شيء)
-  const REQUIRED_ACCURACY_M = 10;
-
-  // التحديث التلقائي
-  const AUTO_REFRESH_INTERVAL_MS = 3000; // كل 3 ثواني
-  const MAX_AUTO_TRIES = 8;              // أقصى محاولات تلقائية (حتى لا يعلق)
-  const GPS_TIMEOUT_MS = 15000;
-
   async function loadDevices() {
+    // المصدر الأساسي: devices.json (مشترك لكل الموظفين)
     try {
       const res = await fetch("devices.json", { cache: "no-store" });
       if (res.ok) {
@@ -105,12 +88,14 @@
             lng: Number(d.lng),
           })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
 
+          // نخزن نسخة محلية كـ fallback
           localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized, null, 2));
           return normalized;
         }
       }
     } catch {}
 
+    // fallback: localStorage
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
@@ -158,54 +143,15 @@
     return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
 
-  const btnRefreshLoc = document.getElementById("btnRefreshLoc");
-  const locAcc = document.getElementById("locAcc");
-
-  function showAccuracy(acc) {
-    if (!acc || !isFinite(acc)) {
-      locAcc.style.display = "none";
-      locAcc.textContent = "";
-      return;
-    }
-    locAcc.style.display = "inline-block";
-    locAcc.textContent = `دقة الموقع: ~${Math.round(acc)}م`;
-  }
-  function showRefresh(show) {
-    btnRefreshLoc.style.display = show ? "inline-block" : "none";
-  }
-
-  function requestLocationOnce() {
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) return reject(new Error("no_geo"));
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve(pos),
-        (err) => reject(err),
-        { enableHighAccuracy: true, timeout: GPS_TIMEOUT_MS, maximumAge: 0 }
-      );
-    });
-  }
-
   let devices = [];
   let myPos = null;
-  let myAccuracy = null;
   let myMarker = null;
   let pickMode = null;
   let tempPickMarker = null;
 
-  let autoTimer = null;
-  let autoTries = 0;
-
   const map = L.map('map').setView([33.3152, 44.3661], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
   const deviceLayer = L.layerGroup().addTo(map);
-
-  function stopAutoRefresh() {
-    if (autoTimer) {
-      clearInterval(autoTimer);
-      autoTimer = null;
-    }
-    autoTries = 0;
-  }
 
   async function renderMarkers() {
     deviceLayer.clearLayers();
@@ -282,7 +228,6 @@
       nearestBox.textContent = "اضغط “حدد موقعي” لعرض الأقرب.";
       return;
     }
-
     const nearest = data[0];
     nearestBox.innerHTML = `
       <div style="font-weight:900; font-size:15px">${escapeHtml(nearest.name)}</div>
@@ -293,13 +238,7 @@
         <button id="btnZoomNearest">🔎 عرض على الخريطة</button>
       </div>
     `;
-
-    document.getElementById("btnGoNearest").onclick = async () => {
-      const ok = await ensureAccurateLocation(true);
-      if (!ok) return;
-      openGoogleMapsRoute(myPos.lat, myPos.lng, nearest.lat, nearest.lng);
-    };
-
+    document.getElementById("btnGoNearest").onclick = () => openGoogleMapsRoute(myPos.lat, myPos.lng, nearest.lat, nearest.lng);
     document.getElementById("btnZoomNearest").onclick = () => map.setView([nearest.lat, nearest.lng], 17);
   }
 
@@ -315,131 +254,23 @@
     }
   }
 
-  async function updateMyLocationOnce() {
-    if (!navigator.geolocation) {
-      setStatus("المتصفح لا يدعم تحديد الموقع.", "danger");
-      return false;
-    }
-
-    try {
-      const pos = await requestLocationOnce();
-      myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      myAccuracy = pos.coords.accuracy || null;
-      showAccuracy(myAccuracy);
-      await renderMarkers();
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  function startAutoRefreshIfNeeded() {
-    stopAutoRefresh();
-    autoTimer = setInterval(async () => {
-      autoTries++;
-      const ok = await updateMyLocationOnce();
-      if (!ok) {
-        setStatus("فشل تحديد الموقع. تأكد من تشغيل GPS والسماح بالإذن.", "danger");
-        showRefresh(true);
-        stopAutoRefresh();
-        return;
-      }
-
-      if (myAccuracy && myAccuracy <= REQUIRED_ACCURACY_M) {
-        setStatus(`تم تحسين الدقة ✅ (${Math.round(myAccuracy)}م). يمكنك الآن الذهاب للجهاز.`, "ok");
-        showRefresh(false);
-        stopAutoRefresh();
-        return;
-      }
-
-      if (autoTries >= MAX_AUTO_TRIES) {
-        setStatus(
-          `لم نصل لدقة 10م بعد (الآن: ${Math.round(myAccuracy || 0)}م). جرّب قرب نافذة/الخارج ثم اضغط "حدّث الموقع مرة أخرى".`,
-          "warn"
-        );
-        showRefresh(true);
-        stopAutoRefresh();
-        return;
-      }
-
-      setStatus(`تحسين الدقة... المحاولة ${autoTries}/${MAX_AUTO_TRIES} (الدقة الآن: ${Math.round(myAccuracy || 0)}م)`, "warn");
-      showRefresh(true);
-    }, AUTO_REFRESH_INTERVAL_MS);
-  }
-
-  // ✅ يضمن الدقة قبل "اذهب" أو "افتح المسار"
-  async function ensureAccurateLocation(startAuto) {
-    if (!myPos) {
-      setStatus("جاري تحديد الموقع...", "warn");
-      const ok = await updateMyLocationOnce();
-      if (!ok) {
-        setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger");
-        showRefresh(true);
-        return false;
-      }
-    }
-
-    if (myAccuracy && myAccuracy > REQUIRED_ACCURACY_M) {
-      showRefresh(true);
-      setStatus(
-        `الموقع غير دقيق (${Math.round(myAccuracy)}م). يتم الآن تحديثه تلقائيًا حتى يصل إلى 10م...`,
-        "warn"
-      );
-      if (startAuto) startAutoRefreshIfNeeded();
-      return false;
-    }
-
-    showRefresh(false);
-    return true;
-  }
-
-  document.getElementById("btnLocate").onclick = async () => {
-    stopAutoRefresh();
-    showRefresh(false);
+  document.getElementById("btnLocate").onclick = () => {
+    if (!navigator.geolocation) { setStatus("المتصفح لا يدعم تحديد الموقع.", "danger"); return; }
     setStatus("جاري تحديد الموقع...", "warn");
-
-    const ok = await updateMyLocationOnce();
-    if (!ok) {
-      setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger");
-      showRefresh(true);
-      return;
-    }
-
-    if (myAccuracy && myAccuracy > REQUIRED_ACCURACY_M) {
-      setStatus(`الموقع غير دقيق (${Math.round(myAccuracy)}م). سيتم تحديثه تلقائيًا للوصول إلى 10م...`, "warn");
-      showRefresh(true);
-      startAutoRefreshIfNeeded();
-      return;
-    }
-
-    setStatus("تم تحديد موقعك بدقة ✅", "ok");
-    centerMap();
-  };
-
-  btnRefreshLoc.onclick = async () => {
-    stopAutoRefresh();
-    setStatus("تحديث الموقع...", "warn");
-    const ok = await updateMyLocationOnce();
-    if (!ok) {
-      setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger");
-      showRefresh(true);
-      return;
-    }
-
-    if (myAccuracy && myAccuracy > REQUIRED_ACCURACY_M) {
-      setStatus(`الموقع غير دقيق (${Math.round(myAccuracy)}م). سيتم تحديثه تلقائيًا للوصول إلى 10م...`, "warn");
-      showRefresh(true);
-      startAutoRefreshIfNeeded();
-    } else {
-      setStatus(`تم تحسين الدقة ✅ (${Math.round(myAccuracy || 0)}م)`, "ok");
-      showRefresh(false);
-    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setStatus("تم تحديد موقعك.", "ok");
+        renderMarkers().then(centerMap);
+      },
+      _ => setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.", "danger"),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
+    );
   };
 
   document.getElementById("btnCenter").onclick = centerMap;
 
   document.getElementById("btnPickMyPos").onclick = () => {
-    stopAutoRefresh();
     pickMode = "mypos";
     setStatus("اضغط على الخريطة لتحديد موقعك يدويًا.", "warn");
   };
@@ -451,49 +282,36 @@
 
   map.on("click", (e) => {
     if (pickMode !== "mypos") return;
-    stopAutoRefresh();
-
     const { lat, lng } = e.latlng;
     if (tempPickMarker) map.removeLayer(tempPickMarker);
     tempPickMarker = L.marker([lat, lng]).addTo(map);
-
     myPos = { lat, lng };
-    myAccuracy = null; // يدوي
-    showAccuracy(null);
-    showRefresh(false);
-
     setStatus("تم تحديد موقعك يدويًا.", "ok");
     pickMode = null;
     renderMarkers();
   });
 
-  window.__goTo = async (id) => {
+  window.__goTo = (id) => {
     const d = devices.find(x => x.id === id);
     if (!d) return;
-
-    const ok = await ensureAccurateLocation(true);
-    if (!ok) return;
-
+    if (!myPos) { setStatus("حدد موقعك أولاً.", "warn"); return; }
     openGoogleMapsRoute(myPos.lat, myPos.lng, d.lat, d.lng);
   };
-
   window.__zoomTo = (id) => {
     const d = devices.find(x => x.id === id);
     if (!d) return;
     map.setView([d.lat, d.lng], 17);
   };
 
-  document.getElementById("deviceList").onclick = async (ev) => {
+  document.getElementById("deviceList").onclick = (ev) => {
     const btn = ev.target.closest("button");
     if (!btn) return;
-
     const goId = btn.getAttribute("data-go");
     const zoomId = btn.getAttribute("data-zoom");
     const id = goId || zoomId;
     const d = devices.find(x => x.id === id);
     if (!d) return;
-
-    if (goId) await window.__goTo(id);
+    if (goId) window.__goTo(id);
     if (zoomId) window.__zoomTo(id);
   };
 
