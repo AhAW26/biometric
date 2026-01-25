@@ -137,6 +137,10 @@
 </div>
 
 <script>
+  // ضع توكن Mapbox هنا (Public token)
+  const MAPBOX_ACCESS_TOKEN = "pk.eyJ1IjoiYWhtZWRiaW9tYXAiLCJhIjoiY21rdGlxN24yMWtpbDNpc2E5ZG1hd2NrdCJ9.312jef8HUcQgXtNuolCMLg";
+  const MAPBOX_STYLE_ID = "mapbox/streets-v12";
+
   /* ========= Admin Password Gate =========
      غيّر كلمة السر من هذا السطر فقط:
   */
@@ -195,7 +199,7 @@
 
   async function loadDevicesFromJson() {
     try {
-      const res = await fetch("devices.json", { cache: "no-store" });
+      const res = await fetch(`devices.json?v=${Date.now()}` , { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -264,8 +268,20 @@
     if (!devices.length) devices = await loadDevicesFromJson();
 
     map = L.map('map').setView([33.3152, 44.3661], 12);
+      // Mapbox raster tiles (أوضح من OSM الافتراضي). ملاحظة: هذا لا يزيد دقة GPS، لكنه يحسن تفاصيل الخريطة.
+  if (!MAPBOX_ACCESS_TOKEN || MAPBOX_ACCESS_TOKEN.includes('PASTE_')) {
+    console.warn('Mapbox token is missing. Using OSM tiles as fallback.');
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-    deviceLayer = L.layerGroup().addTo(map);
+  } else {
+    const mbUrl = `https://api.mapbox.com/styles/v1/${MAPBOX_STYLE_ID}/tiles/512/{z}/{x}/{y}?access_token=${MAPBOX_ACCESS_TOKEN}`;
+    L.tileLayer(mbUrl, {
+      maxZoom: 22,
+      tileSize: 512,
+      zoomOffset: -1,
+      attribution: '© OpenStreetMap contributors © Mapbox'
+    }).addTo(map);
+  }
+deviceLayer = L.layerGroup().addTo(map);
 
     document.getElementById("btnPickOnMap").onclick = () => {
       pickMode = true;
