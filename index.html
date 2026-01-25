@@ -82,6 +82,7 @@
 
 <script>
   const STORAGE_KEY = "biometric_devices_v1";
+  const NEAR_METERS = 10; // إذا أقرب من 10م لا نفتح مسار
 
   // ✅ دقة مطلوبة: 10 متر (أعلى شيء)
   const REQUIRED_ACCURACY_M = 10;
@@ -297,6 +298,12 @@
     document.getElementById("btnGoNearest").onclick = async () => {
       const ok = await ensureAccurateLocation(true);
       if (!ok) return;
+      const dist = haversineMeters(myPos.lat, myPos.lng, nearest.lat, nearest.lng);
+      if (isFinite(dist) && dist <= NEAR_METERS) {
+        setStatus(`✅ أنت قريب جداً من أقرب جهاز (حوالي ${Math.round(dist)} م). لا حاجة لفتح المسار.`, "ok");
+        map.setView([nearest.lat, nearest.lng], 18);
+        return;
+      }
       openGoogleMapsRoute(myPos.lat, myPos.lng, nearest.lat, nearest.lng);
     };
 
@@ -474,8 +481,15 @@
     const ok = await ensureAccurateLocation(true);
     if (!ok) return;
 
+    const dist = haversineMeters(myPos.lat, myPos.lng, d.lat, d.lng);
+    if (isFinite(dist) && dist <= NEAR_METERS) {
+      setStatus(`✅ أنت قريب جداً من جهاز "${d.name}" (حوالي ${Math.round(dist)} م). لا حاجة لفتح المسار.`, "ok");
+      map.setView([d.lat, d.lng], 18);
+      return;
+    }
+
     openGoogleMapsRoute(myPos.lat, myPos.lng, d.lat, d.lng);
-  };
+    };
 
   window.__zoomTo = (id) => {
     const d = devices.find(x => x.id === id);
@@ -506,3 +520,4 @@
 </script>
 </body>
 </html>
+
