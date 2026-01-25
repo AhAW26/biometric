@@ -81,20 +81,26 @@
 </div>
 
 <script>
+  // ضع توكن Mapbox هنا (Public token)
+  const MAPBOX_ACCESS_TOKEN = "pk.eyJ1IjoiYWhtZWRiaW9tYXAiLCJhIjoiY21rdGlxN24yMWtpbDNpc2E5ZG1hd2NrdCJ9.312jef8HUcQgXtNuolCMLg";
+  const MAPBOX_STYLE_ID = "mapbox/streets-v12";
+
   const STORAGE_KEY = "biometric_devices_v1";
   const NEAR_METERS = 10; // إذا أقرب من 10م لا نفتح مسار
 
   // ✅ دقة مطلوبة: 10 متر (أعلى شيء)
   const REQUIRED_ACCURACY_M = 10;
 
-  // التحديث التلقائي
+  
+  function isAccuracyGood(){ return myAccuracy != null && myAccuracy <= REQUIRED_ACCURACY_M; }
+// التحديث التلقائي
   const AUTO_REFRESH_INTERVAL_MS = 3000; // كل 3 ثواني
   const MAX_AUTO_TRIES = 8;              // أقصى محاولات تلقائية (حتى لا يعلق)
   const GPS_TIMEOUT_MS = 15000;
 
   async function loadDevices() {
     try {
-      const res = await fetch("devices.json", { cache: "no-store" });
+      const res = await fetch(`devices.json?v=${Date.now()}` , { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -197,8 +203,20 @@
   let autoTries = 0;
 
   const map = L.map('map').setView([33.3152, 44.3661], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-  const deviceLayer = L.layerGroup().addTo(map);
+    // Mapbox raster tiles (أوضح من OSM الافتراضي). ملاحظة: هذا لا يزيد دقة GPS، لكنه يحسن تفاصيل الخريطة.
+  if (!MAPBOX_ACCESS_TOKEN || MAPBOX_ACCESS_TOKEN.includes('PASTE_')) {
+    console.warn('Mapbox token is missing. Using OSM tiles as fallback.');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  } else {
+    const mbUrl = `https://api.mapbox.com/styles/v1/${MAPBOX_STYLE_ID}/tiles/512/{z}/{x}/{y}?access_token=${MAPBOX_ACCESS_TOKEN}`;
+    L.tileLayer(mbUrl, {
+      maxZoom: 22,
+      tileSize: 512,
+      zoomOffset: -1,
+      attribution: '© OpenStreetMap contributors © Mapbox'
+    }).addTo(map);
+  }
+const deviceLayer = L.layerGroup().addTo(map);
 
   function stopAutoRefresh() {
     if (autoTimer) {
@@ -279,11 +297,12 @@
     });
 
     const nearestBox = document.getElementById("nearestBox");
-    if (!myPos) {
-      nearestBox.textContent = "اضغط “حدد موقعي” لعرض الأقرب.";
+    if (!myPos) { nearestBox.textContent = "اضغط “حدد موقعي” لعرض الأقرب."; return; }
+    if (myAccuracy && myAccuracy > REQUIRED_ACCURACY_M) {
+      nearestBox.innerHTML = `دقة موقعك غير كافية الآن (${Math.round(myAccuracy)}م). اضغط <b>تحديث الموقع</b> للوصول إلى 10م ثم سيظهر الأقرب بشكل صحيح.`;
+      showRefresh(true); startAutoRefreshIfNeeded();
       return;
     }
-
     const nearest = data[0];
     nearestBox.innerHTML = `
       <div style="font-weight:900; font-size:15px">${escapeHtml(nearest.name)}</div>
