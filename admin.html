@@ -45,7 +45,6 @@
     }
     #lockCard h3 { margin:0 0 8px; font-size:15px; }
     #lockCard .mut { line-height:1.5; }
-
     @media (min-width: 980px) {
       .wrap { grid-template-columns: 1.2fr 0.8fr; align-items:start; }
       #map { height: calc(100vh - 130px); }
@@ -84,7 +83,6 @@
     <div class="row" style="margin-bottom:10px">
       <button class="ghost" id="btnCenter">🧭 توسيط الخريطة</button>
       <button class="primary" id="btnPickOnMap">📌 اختر موقع الجهاز على الخريطة</button>
-      <button class="ghost" id="btnGetGps">📡 التقاط موقع الجهاز (GPS)</button>
       <button class="ghost" id="btnReload">🔄 إعادة تحميل من devices.json</button>
     </div>
     <div id="map"></div>
@@ -105,11 +103,7 @@
           <button class="primary" id="btnSave">💾 حفظ</button>
           <button class="ghost" id="btnClear">مسح الحقول</button>
         </div>
-        <div class="mut">
-          خيارين لتحديد الموقع:
-          <br>• 📌 اختر على الخريطة
-          <br>• 📡 GPS (وأنت واقف بجانب الجهاز)
-        </div>
+        <div class="mut">لتحديد الموقع: اضغط “اختر موقع الجهاز على الخريطة” ثم انقر على الخريطة.</div>
       </div>
     </div>
 
@@ -137,15 +131,15 @@
 </div>
 
 <script>
-  // ضع توكن Mapbox هنا (Public token)
-  const MAPBOX_ACCESS_TOKEN = "pk.eyJ1IjoiYWhtZWRiaW9tYXAiLCJhIjoiY21rdGlxN24yMWtpbDNpc2E5ZG1hd2NrdCJ9.312jef8HUcQgXtNuolCMLg";
-  const MAPBOX_STYLE_ID = "mapbox/streets-v12";
-
   /* ========= Admin Password Gate =========
-     غيّر كلمة السر من هذا السطر فقط:
+     غيّر كلمة السر عبر تغيير ADMIN_PASSWORD_PLAINTEXT ثم انسخ هاشها من console أو استخدم نفس الكلمة الافتراضية.
+     (هذه حماية واجهة فقط وليست أمان سيرفر)
   */
+
   const SESSION_KEY = "admin_unlocked_v1";
-  const ADMIN_PASSWORD_PLAINTEXT = "PR@AA2023"; // <-- غيّرها هنا
+
+  // ✅ كلمة السر الافتراضية (غيّرها كما تريد)
+  const ADMIN_PASSWORD_PLAINTEXT = "Admin@12345";
 
   async function sha256Hex(text) {
     const enc = new TextEncoder().encode(text);
@@ -154,6 +148,7 @@
     return bytes.map(b => b.toString(16).padStart(2, "0")).join("");
   }
 
+  // نخزن هاش كلمة السر (مشتق من النص أعلاه) حتى يكون التحقق بالهاش
   let ADMIN_PASSWORD_HASH = null;
 
   async function initPasswordHash() {
@@ -191,6 +186,7 @@
     }
     sessionStorage.setItem(SESSION_KEY, "1");
     showUnlocked();
+    // بعد الفتح: شغل التطبيق
     await bootAdmin();
   };
 
@@ -199,7 +195,7 @@
 
   async function loadDevicesFromJson() {
     try {
-      const res = await fetch(`devices.json?v=${Date.now()}` , { cache: "no-store" });
+      const res = await fetch("devices.json", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -243,11 +239,9 @@
     const v = parseFloat(String(x).trim());
     return Number.isFinite(v) ? v : null;
   }
-
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
-
   function setStatus(msg, cls="mut") {
     const el = document.getElementById("status");
     el.className = cls;
@@ -262,83 +256,28 @@
   let map, deviceLayer;
 
   async function bootAdmin() {
-    if (map) return; // prevent re-init
+    // منع إعادة التهيئة
+    if (map) { return; }
 
     devices = loadDevicesLocal();
     if (!devices.length) devices = await loadDevicesFromJson();
 
     map = L.map('map').setView([33.3152, 44.3661], 12);
-      // Mapbox raster tiles (أوضح من OSM الافتراضي). ملاحظة: هذا لا يزيد دقة GPS، لكنه يحسن تفاصيل الخريطة.
-  if (!MAPBOX_ACCESS_TOKEN || MAPBOX_ACCESS_TOKEN.includes('PASTE_')) {
-    console.warn('Mapbox token is missing. Using OSM tiles as fallback.');
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-  } else {
-    const mbUrl = `https://api.mapbox.com/styles/v1/${MAPBOX_STYLE_ID}/tiles/512/{z}/{x}/{y}?access_token=${MAPBOX_ACCESS_TOKEN}`;
-    L.tileLayer(mbUrl, {
-      maxZoom: 22,
-      tileSize: 512,
-      zoomOffset: -1,
-      attribution: '© OpenStreetMap contributors © Mapbox'
-    }).addTo(map);
-  }
-deviceLayer = L.layerGroup().addTo(map);
+    deviceLayer = L.layerGroup().addTo(map);
 
     document.getElementById("btnPickOnMap").onclick = () => {
       pickMode = true;
       setStatus("اضغط على الخريطة لتثبيت موقع الجهاز.", "warn");
     };
 
-    // ✅ زر GPS الجديد (وأنت واقف بجانب الجهاز)
-    document.getElementById("btnGetGps").onclick = () => {
-      if (!navigator.geolocation) {
-        setStatus("المتصفح لا يدعم GPS.", "danger");
-        return;
-      }
-
-      setStatus("جاري التقاط موقع الجهاز... شغّل GPS واسمح بالإذن.", "warn");
-
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
-
-          document.getElementById("devLat").value = lat.toFixed(6);
-          document.getElementById("devLng").value = lng.toFixed(6);
-
-          if (tempPickMarker) map.removeLayer(tempPickMarker);
-          tempPickMarker = L.marker([lat, lng]).addTo(map);
-
-          map.setView([lat, lng], 18);
-
-          const acc = pos.coords.accuracy ? Math.round(pos.coords.accuracy) : null;
-          setStatus(
-            acc
-              ? `تم التقاط الموقع ✅ (دقة تقريبًا: ${acc} متر). اكتب اسم الجهاز ثم حفظ.`
-              : "تم التقاط الموقع ✅. اكتب اسم الجهاز ثم حفظ.",
-            "ok"
-          );
-        },
-        (err) => {
-          let msg = "فشل التقاط الموقع. اسمح بالوصول للموقع وشغّل GPS.";
-          if (err && err.code === 1) msg = "تم رفض إذن الموقع. فعّل الإذن للمتصفح.";
-          if (err && err.code === 2) msg = "الموقع غير متاح. جرّب بالخارج/قرب نافذة.";
-          if (err && err.code === 3) msg = "انتهت المهلة. حاول مرة ثانية.";
-          setStatus(msg, "danger");
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    };
-
     map.on("click", (e) => {
       if (!pickMode) return;
       const { lat, lng } = e.latlng;
-
       if (tempPickMarker) map.removeLayer(tempPickMarker);
       tempPickMarker = L.marker([lat, lng]).addTo(map);
-
       document.getElementById("devLat").value = lat.toFixed(6);
       document.getElementById("devLng").value = lng.toFixed(6);
-
       pickMode = false;
       setStatus("تم اختيار الموقع. اكتب الاسم ثم اضغط حفظ.", "ok");
     });
@@ -362,12 +301,12 @@ deviceLayer = L.layerGroup().addTo(map);
       }
 
       saveDevicesLocal(devices);
-      clearForm(false);
+      clearForm();
       renderMarkers();
       centerMap();
     };
 
-    document.getElementById("btnClear").onclick = () => { clearForm(true); setStatus("تم مسح الحقول.", "mut"); };
+    document.getElementById("btnClear").onclick = () => { clearForm(); setStatus("تم مسح الحقول.", "mut"); };
     document.getElementById("btnCenter").onclick = centerMap;
 
     document.getElementById("btnReload").onclick = async () => {
@@ -523,16 +462,12 @@ deviceLayer = L.layerGroup().addTo(map);
     }
   }
 
-  function clearForm(clearMarker) {
+  function clearForm() {
     document.getElementById("devName").value = "";
     document.getElementById("devArea").value = "";
     document.getElementById("devLat").value = "";
     document.getElementById("devLng").value = "";
     editingId = null;
-    if (clearMarker && tempPickMarker) {
-      map.removeLayer(tempPickMarker);
-      tempPickMarker = null;
-    }
   }
 
   function editDevice(id) {
@@ -544,7 +479,6 @@ deviceLayer = L.layerGroup().addTo(map);
     document.getElementById("devLat").value = d.lat;
     document.getElementById("devLng").value = d.lng;
     setStatus("وضع التعديل: عدّل ثم اضغط حفظ.", "warn");
-    map.setView([d.lat, d.lng], 17);
   }
 
   function deleteDevice(id) {
@@ -574,6 +508,3 @@ deviceLayer = L.layerGroup().addTo(map);
 </script>
 </body>
 </html>
-
-
-
