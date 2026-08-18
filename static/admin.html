@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>إدارة أجهزة البصمة</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root{--bg:#0b1220;--card:#111a2e;--txt:#e8eefc;--mut:#aab6d6;--bd:#223055;--btn:#2b62ff;--ok:#79ffa6;--warn:#ffcb6b;--bad:#ff7a7a}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial;background:var(--bg);color:var(--txt)}
+    header{padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);z-index:1000}
+    h1{font-size:17px;margin:0}h2{font-size:15px;margin:0 0 10px}.wrap{padding:10px;display:grid;gap:10px;max-width:1250px;margin:auto}.grid{display:grid;gap:9px}.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    button,input,select,textarea{border:1px solid var(--bd);background:var(--card);color:var(--txt);padding:10px 12px;border-radius:11px;font-size:13px}button{cursor:pointer}button.primary{background:var(--btn);border-color:transparent}button.danger{border-color:#703448;color:#ff9aae}button:disabled{opacity:.45;cursor:not-allowed}
+    input,select{width:100%}.mut{font-size:12px;color:var(--mut);line-height:1.55}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+    #map{height:52vh;min-height:390px;border:1px solid var(--bd);border-radius:14px}.tabs{display:flex;gap:7px;flex-wrap:wrap}.tabs button.active{background:var(--btn);border-color:transparent}.tab[hidden]{display:none}
+    .list{display:grid;gap:8px}.item{border:1px solid var(--bd);border-radius:12px;padding:10px;background:rgba(255,255,255,.02)}.item-head{display:flex;justify-content:space-between;gap:10px;align-items:start}
+    .badge{display:inline-block;padding:4px 8px;border:1px solid var(--bd);border-radius:999px;font-size:11px;color:var(--mut)}
+    table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-bottom:1px solid var(--bd);padding:8px;text-align:right;vertical-align:top}.table-wrap{overflow:auto;max-height:520px}
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:14px}.overlay[hidden]{display:none}.dialog{width:min(440px,100%);background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px}
+    @media(min-width:950px){.device-layout{grid-template-columns:1.25fr .75fr;align-items:start}.side-sticky{position:sticky;top:78px}}
+    @media(max-width:600px){#map{min-height:330px;height:45vh}.two{grid-template-columns:1fr}.row>button{flex:1 1 auto}}
+  </style>
+</head>
+<body>
+  <div class="overlay" id="loginOverlay">
+    <form class="dialog grid" id="loginForm">
+      <h2>🔐 تسجيل دخول الإدارة</h2>
+      <div class="mut">تُراجع بيانات الدخول والصلاحيات من الخادم، ولا توجد كلمة مرور داخل الصفحة.</div>
+      <input id="loginUsername" placeholder="اسم المستخدم" autocomplete="username" required>
+      <input id="loginPassword" type="password" placeholder="كلمة المرور" autocomplete="current-password" required>
+      <button class="primary" type="submit">دخول</button>
+      <button type="button" onclick="location.href='/'">العودة إلى الخريطة</button>
+      <div id="loginMessage" class="mut"></div>
+    </form>
+  </div>
+
+  <div class="overlay" id="forcePasswordOverlay" hidden>
+    <form class="dialog grid" id="forcePasswordForm">
+      <h2>تغيير كلمة المرور مطلوب</h2>
+      <div class="mut">اكتب كلمة مرور جديدة من 10 محارف على الأقل وتحتوي حرفًا ورقمًا.</div>
+      <input id="forceCurrentPassword" type="password" placeholder="كلمة المرور الحالية" required>
+      <input id="forceNewPassword" type="password" placeholder="كلمة المرور الجديدة" minlength="10" required>
+      <input id="forceConfirmPassword" type="password" placeholder="تأكيد كلمة المرور" minlength="10" required>
+      <button class="primary" type="submit">حفظ والمتابعة</button>
+      <div id="forcePasswordMessage" class="mut"></div>
+    </form>
+  </div>
+
+  <header>
+    <div><h1>إدارة أجهزة البصمة</h1><div class="mut" id="userLabel"></div></div>
+    <div class="row"><a href="/" style="color:var(--mut);text-decoration:none;font-size:12px">واجهة الموظف</a><button id="logoutBtn">خروج</button></div>
+  </header>
+
+  <main class="wrap" id="app" hidden>
+    <nav class="tabs card">
+      <button class="active" data-tab="devicesTab">الأجهزة</button>
+      <button data-tab="usersTab" class="super-only">المستخدمون</button>
+      <button data-tab="auditTab" class="super-only">سجل العمليات</button>
+      <button data-tab="accountTab">حسابي</button>
+    </nav>
+
+    <section class="tab" id="devicesTab">
+      <div class="grid device-layout">
+        <div class="card">
+          <div class="row" style="margin-bottom:9px">
+            <button id="centerBtn">🧭 توسيط</button>
+            <button id="pickBtn" class="primary write-device">📌 اختر على الخريطة</button>
+            <button id="gpsBtn" class="write-device">📡 التقاط GPS</button>
+            <button id="reloadDevicesBtn">🔄 تحديث</button>
+          </div>
+          <div id="map"></div>
+          <div id="deviceStatus" class="mut" style="margin-top:8px">جاهز.</div>
+        </div>
+        <aside class="grid side-sticky">
+          <form class="card grid" id="deviceForm">
+            <h2 id="deviceFormTitle">إضافة جهاز</h2>
+            <input id="deviceName" placeholder="اسم الجهاز" maxlength="150" required>
+            <input id="deviceArea" placeholder="الموقع أو الوصف المختصر" maxlength="250">
+            <div class="two"><input id="deviceLat" type="number" step="any" placeholder="Latitude" required><input id="deviceLng" type="number" step="any" placeholder="Longitude" required></div>
+            <div class="row"><button class="primary write-device" type="submit">💾 حفظ في الخادم</button><button type="button" id="clearDeviceBtn">مسح</button></div>
+            <div class="mut">بعد الحفظ يظهر التغيير فورًا لجميع الموظفين دون تصدير أو رفع ملف.</div>
+          </form>
+          <div class="card"><div class="item-head"><h2>الأجهزة المسجلة</h2><a href="/devices.json" target="_blank" style="color:var(--mut);font-size:12px">عرض JSON</a></div><div class="list" id="deviceList"></div></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="tab" id="usersTab" hidden>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-items:start">
+        <form class="card grid" id="userForm">
+          <h2>إنشاء مستخدم إداري</h2>
+          <input id="newUsername" placeholder="اسم المستخدم بالإنجليزية" pattern="[A-Za-z0-9._-]+" required>
+          <input id="newDisplayName" placeholder="الاسم الظاهر" required>
+          <select id="newRole"><option value="device_admin">مسؤول أجهزة</option><option value="viewer">مشاهدة فقط</option><option value="super_admin">مدير عام</option></select>
+          <input id="newUserPassword" type="password" minlength="10" placeholder="كلمة مرور أولية" required>
+          <button class="primary" type="submit">إنشاء الحساب</button>
+          <div class="mut">سيُطلب من المستخدم تغيير كلمة المرور عند أول دخول.</div>
+          <div id="userStatus" class="mut"></div>
+        </form>
+        <div class="card"><h2>المستخدمون</h2><div class="list" id="userList"></div></div>
+      </div>
+    </section>
+
+    <section class="tab" id="auditTab" hidden>
+      <div class="card">
+        <div class="item-head"><h2>آخر العمليات</h2><button id="reloadAuditBtn">تحديث</button></div>
+        <div class="table-wrap"><table><thead><tr><th>الوقت</th><th>المستخدم</th><th>العملية</th><th>العنصر</th></tr></thead><tbody id="auditBody"></tbody></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="accountTab" hidden>
+      <form class="card grid" id="changePasswordForm" style="max-width:520px">
+        <h2>تغيير كلمة المرور</h2>
+        <input id="currentPassword" type="password" placeholder="كلمة المرور الحالية" required>
+        <input id="newPassword" type="password" minlength="10" placeholder="كلمة المرور الجديدة" required>
+        <input id="confirmPassword" type="password" minlength="10" placeholder="تأكيد كلمة المرور" required>
+        <button class="primary" type="submit">تغيير كلمة المرور</button>
+        <div id="accountStatus" class="mut"></div>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const roleLabels={super_admin:"مدير عام",device_admin:"مسؤول أجهزة",viewer:"مشاهدة فقط"};
+    const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
+    let currentUser=null,devices=[],editingDeviceId=null,map,deviceLayer,tempMarker,pickMode=false;
+    const loginOverlay=document.getElementById("loginOverlay"),appEl=document.getElementById("app"),forceOverlay=document.getElementById("forcePasswordOverlay");
+
+    function escapeHtml(value){return String(value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
+    function cookie(name){const prefix=`${name}=`;const found=document.cookie.split(";").map(x=>x.trim()).find(x=>x.startsWith(prefix));return found?decodeURIComponent(found.slice(prefix.length)):"";}
+    async function api(path,options={}){
+      const method=(options.method||"GET").toUpperCase(),headers={...(options.headers||{})};
+      if(options.body&&!headers["Content-Type"])headers["Content-Type"]="application/json";
+      if(!["GET","HEAD","OPTIONS"].includes(method))headers["X-CSRF-Token"]=cookie("biometric_csrf");
+      const response=await fetch(path,{...options,method,headers,credentials:"same-origin",cache:"no-store"});
+      let data=null;try{data=await response.json()}catch{}
+      if(response.status===401){showLogin();throw new Error(data?.detail||"انتهت جلسة الدخول.");}
+      if(!response.ok)throw new Error(data?.detail||"تعذر تنفيذ العملية.");
+      return data;
+    }
+    function setMessage(id,message,type="mut"){const el=document.getElementById(id);el.className=type;el.textContent=message;}
+    function showLogin(message=""){loginOverlay.hidden=false;forceOverlay.hidden=true;appEl.hidden=true;document.getElementById("loginMessage").textContent=message;}
+    function applyRole(){
+      document.getElementById("userLabel").textContent=`${currentUser.display_name} — ${roleLabels[currentUser.role]||currentUser.role}`;
+      document.querySelectorAll(".super-only").forEach(el=>el.hidden=currentUser.role!=="super_admin");
+      const canWrite=["super_admin","device_admin"].includes(currentUser.role);
+      document.querySelectorAll(".write-device").forEach(el=>el.disabled=!canWrite);
+      for(const id of ["deviceName","deviceArea","deviceLat","deviceLng"])document.getElementById(id).disabled=!canWrite;
+    }
+    async function enterApp(user){currentUser=user;loginOverlay.hidden=true;forceOverlay.hidden=true;appEl.hidden=false;applyRole();await initMap();await loadDevices();}
+
+    document.getElementById("loginForm").onsubmit=async event=>{
+      event.preventDefault();setMessage("loginMessage","جارِ التحقق...","warn");
+      try{
+        const data=await api("/api/auth/login",{method:"POST",body:JSON.stringify({username:document.getElementById("loginUsername").value,password:document.getElementById("loginPassword").value})});
+        currentUser=data.user;document.getElementById("loginPassword").value="";
+        if(data.must_change_password){loginOverlay.hidden=true;forceOverlay.hidden=false;return;}
+        await enterApp(data.user);
+      }catch(error){setMessage("loginMessage",error.message,"bad");}
+    };
+
+    async function changePassword(currentPassword,newPassword,messageId){
+      if(newPassword.length<10||!/[\p{L}]/u.test(newPassword)||!/[0-9]/.test(newPassword))throw new Error("كلمة المرور يجب أن تحتوي 10 محارف على الأقل وحرفًا ورقمًا.");
+      await api("/api/auth/change-password",{method:"POST",body:JSON.stringify({current_password:currentPassword,new_password:newPassword})});
+      setMessage(messageId,"تم تغيير كلمة المرور.","ok");
+    }
+    document.getElementById("forcePasswordForm").onsubmit=async event=>{
+      event.preventDefault();const current=document.getElementById("forceCurrentPassword").value,next=document.getElementById("forceNewPassword").value,confirm=document.getElementById("forceConfirmPassword").value;
+      if(next!==confirm){setMessage("forcePasswordMessage","التأكيد لا يطابق كلمة المرور الجديدة.","bad");return;}
+      try{await changePassword(current,next,"forcePasswordMessage");const data=await api("/api/auth/me");await enterApp(data.user);}catch(error){setMessage("forcePasswordMessage",error.message,"bad");}
+    };
+    document.getElementById("changePasswordForm").onsubmit=async event=>{
+      event.preventDefault();const current=document.getElementById("currentPassword").value,next=document.getElementById("newPassword").value,confirm=document.getElementById("confirmPassword").value;
+      if(next!==confirm){setMessage("accountStatus","التأكيد لا يطابق كلمة المرور الجديدة.","bad");return;}
+      try{await changePassword(current,next,"accountStatus");event.target.reset();}catch(error){setMessage("accountStatus",error.message,"bad");}
+    };
+    document.getElementById("logoutBtn").onclick=async()=>{try{await api("/api/auth/logout",{method:"POST"});}catch{}showLogin("تم تسجيل الخروج.");};
+
+    async function initMap(){
+      if(map)return;let config={};try{config=await api("/api/config")}catch{}
+      map=L.map("map").setView([32.6,44.05],13);
+      if(config.mapbox_access_token)L.tileLayer(`https://api.mapbox.com/styles/v1/${config.mapbox_style_id||"mapbox/streets-v12"}/tiles/512/{z}/{x}/{y}?access_token=${config.mapbox_access_token}`,{maxZoom:22,tileSize:512,zoomOffset:-1,attribution:"© OpenStreetMap contributors © Mapbox"}).addTo(map);
+      else L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(map);
+      deviceLayer=L.layerGroup().addTo(map);
+      map.on("click",event=>{if(!pickMode)return;pickMode=false;setCoordinates(event.latlng.lat,event.latlng.lng);setMessage("deviceStatus","تم اختيار الموقع؛ اكتب الاسم واضغط حفظ.","ok");});
+      setTimeout(()=>map.invalidateSize(),100);
+    }
+    function setCoordinates(lat,lng){document.getElementById("deviceLat").value=Number(lat).toFixed(6);document.getElementById("deviceLng").value=Number(lng).toFixed(6);if(tempMarker)map.removeLayer(tempMarker);tempMarker=L.marker([lat,lng]).addTo(map);map.setView([lat,lng],18);}
+    async function loadDevices(){try{devices=await api("/api/admin/devices");renderDevices();centerMap();setMessage("deviceStatus","تم تحميل الأجهزة من الخادم.","ok");}catch(error){setMessage("deviceStatus",error.message,"bad");}}
+    function renderDevices(){
+      deviceLayer.clearLayers();const list=document.getElementById("deviceList");list.innerHTML="";const canWrite=["super_admin","device_admin"].includes(currentUser.role);
+      if(!devices.length){list.innerHTML='<div class="mut">لا توجد أجهزة مسجلة.</div>';return;}
+      for(const d of devices){
+        L.marker([d.lat,d.lng]).addTo(deviceLayer).bindPopup(`<b>${escapeHtml(d.name)}</b><div>${escapeHtml(d.area||"")}</div>`);
+        const item=document.createElement("div");item.className="item";item.innerHTML=`<div class="item-head"><div><b>${escapeHtml(d.name)}</b><div class="mut">${escapeHtml(d.area||"")}</div><div class="mut">${Number(d.lat).toFixed(6)}, ${Number(d.lng).toFixed(6)}</div></div><span class="badge">جهاز</span></div><div class="row" style="margin-top:8px"><button data-zoom="${d.id}">عرض</button>${canWrite?`<button data-edit="${d.id}">تعديل</button><button class="danger" data-delete="${d.id}">حذف</button>`:""}</div>`;list.appendChild(item);
+      }
+    }
+    function centerMap(){if(!map)return;if(devices.length)map.fitBounds(L.latLngBounds(devices.map(d=>[d.lat,d.lng])).pad(.25));else map.setView([32.6,44.05],13);}
+    function clearDeviceForm(){editingDeviceId=null;document.getElementById("deviceForm").reset();document.getElementById("deviceFormTitle").textContent="إضافة جهاز";if(tempMarker){map.removeLayer(tempMarker);tempMarker=null;}}
+    function editDevice(id){const d=devices.find(x=>x.id===id);if(!d)return;editingDeviceId=id;document.getElementById("deviceName").value=d.name;document.getElementById("deviceArea").value=d.area||"";document.getElementById("deviceLat").value=d.lat;document.getElementById("deviceLng").value=d.lng;document.getElementById("deviceFormTitle").textContent="تعديل الجهاز";map.setView([d.lat,d.lng],18);}
+    document.getElementById("deviceForm").onsubmit=async event=>{
+      event.preventDefault();const body={name:document.getElementById("deviceName").value,area:document.getElementById("deviceArea").value,lat:Number(document.getElementById("deviceLat").value),lng:Number(document.getElementById("deviceLng").value)};
+      try{const path=editingDeviceId?`/api/admin/devices/${editingDeviceId}`:"/api/admin/devices";await api(path,{method:editingDeviceId?"PUT":"POST",body:JSON.stringify(body)});setMessage("deviceStatus",editingDeviceId?"تم تعديل الجهاز وظهر التحديث للجميع.":"تمت إضافة الجهاز وظهر للجميع.","ok");clearDeviceForm();await loadDevices();}catch(error){setMessage("deviceStatus",error.message,"bad");}
+    };
+    document.getElementById("deviceList").onclick=async event=>{const btn=event.target.closest("button");if(!btn)return;const id=btn.dataset.zoom||btn.dataset.edit||btn.dataset.delete,d=devices.find(x=>x.id===id);if(!d)return;if(btn.dataset.zoom)map.setView([d.lat,d.lng],18);if(btn.dataset.edit)editDevice(id);if(btn.dataset.delete&&confirm(`حذف الجهاز «${d.name}»؟`)){try{await api(`/api/admin/devices/${id}`,{method:"DELETE"});await loadDevices();}catch(error){setMessage("deviceStatus",error.message,"bad");}}};
+    document.getElementById("pickBtn").onclick=()=>{pickMode=true;setMessage("deviceStatus","اضغط على الخريطة لتحديد موقع الجهاز.","warn");};
+    document.getElementById("gpsBtn").onclick=()=>{if(!navigator.geolocation){setMessage("deviceStatus","المتصفح لا يدعم GPS.","bad");return}setMessage("deviceStatus","جارِ التقاط الموقع...","warn");navigator.geolocation.getCurrentPosition(pos=>{setCoordinates(pos.coords.latitude,pos.coords.longitude);setMessage("deviceStatus",`تم التقاط الموقع بدقة تقارب ${Math.round(pos.coords.accuracy||0)}م.`,"ok");},()=>setMessage("deviceStatus","تعذر التقاط الموقع؛ تحقق من إذن GPS.","bad"),{enableHighAccuracy:true,timeout:15000,maximumAge:0});};
+    document.getElementById("centerBtn").onclick=centerMap;document.getElementById("reloadDevicesBtn").onclick=loadDevices;document.getElementById("clearDeviceBtn").onclick=clearDeviceForm;
+
+    async function loadUsers(){
+      if(currentUser.role!=="super_admin")return;try{const users=await api("/api/admin/users"),list=document.getElementById("userList");list.innerHTML="";
+        for(const user of users){const item=document.createElement("div");item.className="item";item.innerHTML=`<div class="item-head"><div><b>${escapeHtml(user.display_name)}</b><div class="mut">${escapeHtml(user.username)}</div></div><span class="badge">${roleLabels[user.role]}</span></div><div class="mut">${user.is_active?"فعال":"معطل"}${user.must_change_password?" — تغيير كلمة المرور مطلوب":""}</div><div class="row" style="margin-top:8px"><button data-role-user="${user.id}" data-current-role="${user.role}">تغيير الصلاحية</button><button data-toggle-user="${user.id}" data-active="${user.is_active}">${user.is_active?"تعطيل":"تفعيل"}</button><button data-reset-user="${user.id}">ضبط كلمة المرور</button></div>`;list.appendChild(item);}
+      }catch(error){setMessage("userStatus",error.message,"bad");}
+    }
+    document.getElementById("userForm").onsubmit=async event=>{event.preventDefault();const body={username:document.getElementById("newUsername").value,display_name:document.getElementById("newDisplayName").value,password:document.getElementById("newUserPassword").value,role:document.getElementById("newRole").value};try{await api("/api/admin/users",{method:"POST",body:JSON.stringify(body)});event.target.reset();setMessage("userStatus","تم إنشاء المستخدم.","ok");await loadUsers();}catch(error){setMessage("userStatus",error.message,"bad");}};
+    document.getElementById("userList").onclick=async event=>{
+      const btn=event.target.closest("button");if(!btn)return;
+      try{
+        if(btn.dataset.roleUser){const role=prompt("اكتب الصلاحية: super_admin أو device_admin أو viewer",btn.dataset.currentRole);if(role)await api(`/api/admin/users/${btn.dataset.roleUser}`,{method:"PUT",body:JSON.stringify({role})});}
+        if(btn.dataset.toggleUser)await api(`/api/admin/users/${btn.dataset.toggleUser}`,{method:"PUT",body:JSON.stringify({is_active:btn.dataset.active!=="true"})});
+        if(btn.dataset.resetUser){const password=prompt("اكتب كلمة مرور أولية جديدة (10 محارف مع حرف ورقم):");if(password)await api(`/api/admin/users/${btn.dataset.resetUser}/reset-password`,{method:"POST",body:JSON.stringify({new_password:password})});}
+        await loadUsers();
+      }catch(error){setMessage("userStatus",error.message,"bad");}
+    };
+    async function loadAudit(){if(currentUser.role!=="super_admin")return;try{const rows=await api("/api/admin/audit?limit=200"),body=document.getElementById("auditBody");body.innerHTML="";for(const row of rows){const tr=document.createElement("tr");tr.innerHTML=`<td>${new Date(row.created_at).toLocaleString("ar-IQ")}</td><td>${escapeHtml(row.username)}</td><td>${escapeHtml(actionLabels[row.action]||row.action)}</td><td>${escapeHtml(row.entity_type)} ${escapeHtml(row.entity_id)}</td>`;body.appendChild(tr);}}catch(error){alert(error.message);}}
+    document.getElementById("reloadAuditBtn").onclick=loadAudit;
+
+    document.querySelector(".tabs").onclick=async event=>{const button=event.target.closest("button[data-tab]");if(!button)return;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("active",x===button));document.querySelectorAll(".tab").forEach(tab=>tab.hidden=tab.id!==button.dataset.tab);if(button.dataset.tab==="usersTab")await loadUsers();if(button.dataset.tab==="auditTab")await loadAudit();if(button.dataset.tab==="devicesTab"&&map)setTimeout(()=>map.invalidateSize(),50);};
+
+    (async()=>{try{const data=await api("/api/auth/me");currentUser=data.user;if(data.must_change_password){loginOverlay.hidden=true;forceOverlay.hidden=false;}else await enterApp(data.user);}catch{showLogin();}})();
+  </script>
+</body>
+</html>

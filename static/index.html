@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>أقرب جهاز بصمة</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root{--bg:#0b1220;--card:#111a2e;--txt:#e8eefc;--mut:#aab6d6;--bd:#223055;--btn:#2b62ff;--ok:#79ffa6;--warn:#ffcb6b;--bad:#ff7a7a}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial;background:var(--bg);color:var(--txt)}
+    header{padding:14px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:10px;align-items:center}
+    h1{margin:0;font-size:18px}.mut,.hint{color:var(--mut);font-size:12px;line-height:1.55}.wrap{padding:10px;display:grid;gap:10px;max-width:1100px;margin:auto}
+    #map{height:58vh;min-height:360px;border:1px solid var(--bd);border-radius:14px;overflow:hidden}.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}button{border:1px solid var(--bd);background:var(--card);color:var(--txt);padding:11px 12px;border-radius:12px;font-size:14px;cursor:pointer}
+    button.primary{background:var(--btn);border-color:transparent}button:disabled{opacity:.5;cursor:not-allowed}.big{font-size:15px;font-weight:800}.list{display:grid;gap:8px;margin-top:10px}
+    .item{border:1px solid var(--bd);border-radius:14px;padding:10px;background:rgba(255,255,255,.02)}.item .top{display:flex;justify-content:space-between;gap:10px}
+    .pill{border:1px solid var(--bd);background:rgba(255,255,255,.03);padding:6px 10px;border-radius:999px;font-size:12px;color:var(--mut)}
+    a{color:var(--mut);text-decoration:none;font-size:12px}.ok{color:var(--ok)}.warn{color:var(--warn)}.danger{color:var(--bad)}
+    @media(max-width:600px){#map{height:52vh;min-height:320px}button{flex:1 1 auto}.secondary-actions button{font-size:12px;padding:9px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>أقرب جهاز بصمة</h1><div class="mut">حدّد موقعك لعرض أقرب جهاز والمسار إليه.</div></div>
+    <a href="/admin" title="للإدارة فقط">⚙️ الإدارة</a>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <div class="row">
+        <button class="primary" id="locateBtn">📍 حدّد موقعي</button>
+        <button id="refreshBtn" hidden>📍 حدّث الموقع</button>
+        <span class="pill" id="accuracy" hidden></span>
+      </div>
+      <div class="row secondary-actions" style="margin-top:8px">
+        <button id="manualBtn">🖐️ اختيار موقعي يدويًا</button>
+        <button id="centerBtn">🧭 توسيط الخريطة</button>
+        <button id="reloadBtn">🔄 تحديث الأجهزة</button>
+      </div>
+      <div class="hint" id="status" style="margin-top:8px">جارِ تشغيل البرنامج...</div>
+    </section>
+
+    <div id="map" aria-label="خريطة أجهزة البصمة"></div>
+
+    <section class="card">
+      <div class="big">أقرب جهاز</div>
+      <div id="nearest" class="hint" style="margin-top:6px">جارِ تحميل الأجهزة...</div>
+    </section>
+
+    <section class="card">
+      <div class="big">الأجهزة الأقرب</div>
+      <div class="hint">تُرتب الأجهزة حسب المسافة بعد تحديد موقعك.</div>
+      <div class="list" id="deviceList"></div>
+    </section>
+  </main>
+
+  <script>
+    const REQUIRED_ACCURACY_M = 10;
+    const NEAR_METERS = 10;
+    const GPS_TIMEOUT_MS = 15000;
+    const AUTO_REFRESH_INTERVAL_MS = 3000;
+    const MAX_AUTO_TRIES = 8;
+    const STORAGE_KEY = "biometric_devices_v2";
+
+    let map, deviceLayer, myMarker, tempMarker, autoTimer;
+    let devices = [], myPos = null, myAccuracy = null, manualMode = false, autoTries = 0;
+
+    const statusEl = document.getElementById("status");
+    const accuracyEl = document.getElementById("accuracy");
+    const refreshBtn = document.getElementById("refreshBtn");
+
+    function escapeHtml(value){return String(value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
+    function setStatus(message, cls=""){statusEl.className=`hint ${cls}`;statusEl.textContent=message;}
+    function fmtDistance(m){return !Number.isFinite(m)?"-":m<1000?`${Math.round(m)} م`:`${(m/1000).toFixed(2)} كم`;}
+    function haversine(lat1,lng1,lat2,lng2){const r=6371000,toRad=d=>d*Math.PI/180,dLat=toRad(lat2-lat1),dLng=toRad(lng2-lng1);const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;return 2*r*Math.asin(Math.sqrt(a));}
+    function showAccuracy(){if(!myAccuracy){accuracyEl.hidden=true;return}accuracyEl.hidden=false;accuracyEl.textContent=`دقة الموقع: ~${Math.round(myAccuracy)}م`;}
+    function accurate(){return myAccuracy===null||myAccuracy<=REQUIRED_ACCURACY_M;}
+
+    async function api(url){const response=await fetch(url,{cache:"no-store"});if(!response.ok)throw new Error("network");return response.json();}
+
+    async function loadDevices(){
+      try{
+        const data=await api(`/api/devices?v=${Date.now()}`);
+        devices=data.filter(d=>d.name&&Number.isFinite(Number(d.lat))&&Number.isFinite(Number(d.lng))).map(d=>({...d,lat:Number(d.lat),lng:Number(d.lng)}));
+        localStorage.setItem(STORAGE_KEY,JSON.stringify(devices));
+      }catch{
+        try{devices=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");setStatus("تعذر الاتصال بالخادم؛ تُعرض آخر نسخة محفوظة.","warn");}catch{devices=[];}
+      }
+    }
+
+    async function initMap(){
+      let config={};try{config=await api("/api/config")}catch{}
+      map=L.map("map").setView([32.6,44.05],13);
+      if(config.mapbox_access_token){
+        const style=config.mapbox_style_id||"mapbox/streets-v12";
+        L.tileLayer(`https://api.mapbox.com/styles/v1/${style}/tiles/512/{z}/{x}/{y}?access_token=${config.mapbox_access_token}`,{maxZoom:22,tileSize:512,zoomOffset:-1,attribution:"© OpenStreetMap contributors © Mapbox"}).addTo(map);
+      }else{
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(map);
+      }
+      deviceLayer=L.layerGroup().addTo(map);
+      map.on("click",event=>{
+        if(!manualMode)return;
+        manualMode=false;myPos={lat:event.latlng.lat,lng:event.latlng.lng};myAccuracy=null;
+        if(tempMarker)map.removeLayer(tempMarker);tempMarker=L.marker([myPos.lat,myPos.lng]).addTo(map).bindPopup("موقعي المختار");
+        showAccuracy();setStatus("تم تحديد موقعك يدويًا.","ok");render();
+      });
+    }
+
+    function sortedDevices(){return devices.map(d=>({...d,dist:myPos?haversine(myPos.lat,myPos.lng,d.lat,d.lng):Infinity})).sort((a,b)=>a.dist-b.dist);}
+
+    function render(){
+      deviceLayer.clearLayers();
+      for(const d of devices){
+        const marker=L.marker([d.lat,d.lng]).addTo(deviceLayer);
+        marker.bindPopup(`<div style="min-width:180px"><b>${escapeHtml(d.name)}</b><div>${escapeHtml(d.area||"")}</div><div style="margin-top:8px"><button onclick="goToDevice('${d.id}')">اذهب</button> <button onclick="zoomToDevice('${d.id}')">عرض</button></div></div>`);
+      }
+      if(myPos){if(!myMarker)myMarker=L.circleMarker([myPos.lat,myPos.lng],{radius:9,color:"#2b62ff",fillOpacity:.8}).addTo(map).bindPopup("موقعي الحالي");else myMarker.setLatLng([myPos.lat,myPos.lng]);}
+      renderList();
+    }
+
+    function renderList(){
+      const list=document.getElementById("deviceList"),nearest=document.getElementById("nearest");list.innerHTML="";
+      if(!devices.length){list.innerHTML='<div class="hint">لا توجد أجهزة مسجلة.</div>';nearest.textContent="لا توجد أجهزة مسجلة.";return;}
+      const data=sortedDevices();
+      for(const d of data.slice(0,10)){
+        const item=document.createElement("div");item.className="item";
+        item.innerHTML=`<div class="top"><div><b>${escapeHtml(d.name)}</b><div class="hint">${escapeHtml(d.area||"")}</div></div><div><b>${myPos?fmtDistance(d.dist):"-"}</b><div class="hint">المسافة</div></div></div><div class="row" style="margin-top:8px"><button class="primary" data-go="${d.id}">🧭 اذهب</button><button data-zoom="${d.id}">🔎 عرض</button></div>`;
+        list.appendChild(item);
+      }
+      if(!myPos){nearest.textContent='اضغط «حدّد موقعي» لعرض الأقرب.';return;}
+      if(!accurate()){
+        nearest.innerHTML=`دقة الموقع غير كافية الآن (${Math.round(myAccuracy)}م). نحتاج إلى 10م أو أقل.`;refreshBtn.hidden=false;return;
+      }
+      const first=data[0];
+      nearest.innerHTML=`<b style="font-size:15px">${escapeHtml(first.name)}</b><div class="hint">${escapeHtml(first.area||"")}</div><div style="margin-top:6px">المسافة: <b>${fmtDistance(first.dist)}</b></div><div class="row" style="margin-top:8px"><button class="primary" data-nearest-go>🧭 افتح المسار</button><button data-nearest-zoom>🔎 عرض على الخريطة</button></div>`;
+      nearest.querySelector("[data-nearest-go]").onclick=()=>goToDevice(first.id);
+      nearest.querySelector("[data-nearest-zoom]").onclick=()=>zoomToDevice(first.id);
+    }
+
+    function requestLocation(){return new Promise((resolve,reject)=>navigator.geolocation?navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:GPS_TIMEOUT_MS,maximumAge:0}):reject(new Error("unsupported")));}
+    async function updateLocation(){
+      try{const pos=await requestLocation();myPos={lat:pos.coords.latitude,lng:pos.coords.longitude};myAccuracy=pos.coords.accuracy||null;showAccuracy();render();return true}catch{return false;}
+    }
+    function stopAuto(){if(autoTimer)clearInterval(autoTimer);autoTimer=null;autoTries=0;}
+    function startAuto(){
+      stopAuto();autoTimer=setInterval(async()=>{autoTries++;const ok=await updateLocation();
+        if(!ok){setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.","danger");refreshBtn.hidden=false;stopAuto();return;}
+        if(accurate()){setStatus(`تم تحسين الدقة إلى ${Math.round(myAccuracy)}م.`,"ok");refreshBtn.hidden=true;centerMap();stopAuto();return;}
+        if(autoTries>=MAX_AUTO_TRIES){setStatus(`لم نصل إلى دقة 10م؛ الدقة الحالية ${Math.round(myAccuracy)}م. جرّب قرب نافذة أو في الخارج.`,"warn");refreshBtn.hidden=false;stopAuto();return;}
+        setStatus(`جارِ تحسين الدقة: المحاولة ${autoTries}/${MAX_AUTO_TRIES}.`,"warn");
+      },AUTO_REFRESH_INTERVAL_MS);
+    }
+    async function locate(){stopAuto();setStatus("جارِ تحديد موقعك...","warn");const ok=await updateLocation();if(!ok){setStatus("تعذر تحديد الموقع. شغّل GPS ووافق على الإذن.","danger");refreshBtn.hidden=false;return}if(!accurate()){setStatus(`الدقة الحالية ${Math.round(myAccuracy)}م؛ يجري تحسينها تلقائيًا.`,"warn");refreshBtn.hidden=false;startAuto();return}setStatus("تم تحديد موقعك بدقة.","ok");refreshBtn.hidden=true;centerMap();}
+
+    async function ensureLocation(){if(!myPos)await locate();if(!myPos)return false;if(!accurate()){setStatus("دقة الموقع غير كافية لفتح المسار؛ يجري تحسينها.","warn");startAuto();return false}return true;}
+    window.goToDevice=async id=>{const d=devices.find(x=>x.id===id);if(!d||!await ensureLocation())return;const dist=haversine(myPos.lat,myPos.lng,d.lat,d.lng);if(dist<=NEAR_METERS){setStatus(`أنت قريب جدًا من جهاز «${d.name}» (${Math.round(dist)}م).`,"ok");map.setView([d.lat,d.lng],18);return}window.open(`https://www.google.com/maps/dir/?api=1&origin=${myPos.lat},${myPos.lng}&destination=${d.lat},${d.lng}&travelmode=walking`,"_blank","noopener");};
+    window.zoomToDevice=id=>{const d=devices.find(x=>x.id===id);if(d)map.setView([d.lat,d.lng],17);};
+    function centerMap(){if(devices.length){const bounds=L.latLngBounds(devices.map(d=>[d.lat,d.lng]));if(myPos)bounds.extend([myPos.lat,myPos.lng]);map.fitBounds(bounds.pad(.25));}else if(myPos)map.setView([myPos.lat,myPos.lng],16);}
+
+    document.getElementById("locateBtn").onclick=locate;
+    refreshBtn.onclick=locate;
+    document.getElementById("manualBtn").onclick=()=>{stopAuto();manualMode=true;setStatus("اضغط على الخريطة لتحديد موقعك يدويًا.","warn");};
+    document.getElementById("centerBtn").onclick=centerMap;
+    document.getElementById("reloadBtn").onclick=async()=>{setStatus("جارِ تحديث قائمة الأجهزة...","warn");await loadDevices();render();centerMap();setStatus("تم تحديث الأجهزة.","ok");};
+    document.getElementById("deviceList").onclick=event=>{const button=event.target.closest("button");if(!button)return;if(button.dataset.go)goToDevice(button.dataset.go);if(button.dataset.zoom)zoomToDevice(button.dataset.zoom);};
+
+    (async()=>{try{await initMap();await loadDevices();render();centerMap();setStatus("جاهز.","ok");}catch{setStatus("تعذر تشغيل الخريطة. تحقق من اتصال الإنترنت ثم أعد المحاولة.","danger");}})();
+  </script>
+</body>
+</html>
