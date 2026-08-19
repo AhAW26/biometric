@@ -32,7 +32,7 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.2.0"
+    assert health.json()["version"] == "2.3.0"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
@@ -41,6 +41,10 @@ def run() -> None:
     assert "https://tile.openstreetmap.org" in public_page.headers["content-security-policy"]
     assert "https://tiles.openfreemap.org" not in public_page.headers["content-security-policy"]
     assert "https://api.mapbox.com" not in public_page.headers["content-security-policy"]
+    assert "المسافة تقديرية لأن دقة الهاتف الحالية" in public_page.text
+    assert "setInterval(async" not in public_page.text
+    assert "setTimeout(tryNext" in public_page.text
+    assert "دقة الموقع غير كافية الآن" not in public_page.text
 
     map_config = client.get("/api/config")
     assert map_config.status_code == 200

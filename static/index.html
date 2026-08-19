@@ -66,7 +66,8 @@
     const DEFAULT_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
     let map, deviceLayer, myMarker, tempMarker, autoTimer;
-    let devices = [], myPos = null, myAccuracy = null, manualMode = false, autoTries = 0;
+    let devices = [], myPos = null, myAccuracy = null, locationSource = null;
+    let manualMode = false, autoTries = 0, locationRun = 0;
 
     const statusEl = document.getElementById("status");
     const accuracyEl = document.getElementById("accuracy");
@@ -76,8 +77,12 @@
     function setStatus(message, cls=""){statusEl.className=`hint ${cls}`;statusEl.textContent=message;}
     function fmtDistance(m){return !Number.isFinite(m)?"-":m<1000?`${Math.round(m)} م`:`${(m/1000).toFixed(2)} كم`;}
     function haversine(lat1,lng1,lat2,lng2){const r=6371000,toRad=d=>d*Math.PI/180,dLat=toRad(lat2-lat1),dLng=toRad(lng2-lng1);const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;return 2*r*Math.asin(Math.sqrt(a));}
-    function showAccuracy(){if(!myAccuracy){accuracyEl.hidden=true;return}accuracyEl.hidden=false;accuracyEl.textContent=`دقة الموقع: ~${Math.round(myAccuracy)}م`;}
-    function accurate(){return myAccuracy===null||myAccuracy<=REQUIRED_ACCURACY_M;}
+    function showAccuracy(){
+      if(locationSource==="manual"){accuracyEl.hidden=false;accuracyEl.textContent="الموقع: محدد يدويًا";return;}
+      if(!Number.isFinite(myAccuracy)){accuracyEl.hidden=true;return;}
+      accuracyEl.hidden=false;accuracyEl.textContent=`دقة الهاتف: ±${Math.round(myAccuracy)}م`;
+    }
+    function accurate(){return locationSource==="manual"||(Number.isFinite(myAccuracy)&&myAccuracy<=REQUIRED_ACCURACY_M);}
 
     async function api(url){const response=await fetch(url,{cache:"no-store"});if(!response.ok)throw new Error("network");return response.json();}
 
@@ -100,7 +105,7 @@
       deviceLayer=L.layerGroup().addTo(map);
       map.on("click",event=>{
         if(!manualMode)return;
-        manualMode=false;myPos={lat:event.latlng.lat,lng:event.latlng.lng};myAccuracy=null;
+        manualMode=false;myPos={lat:event.latlng.lat,lng:event.latlng.lng};myAccuracy=null;locationSource="manual";
         if(tempMarker)map.removeLayer(tempMarker);tempMarker=L.marker([myPos.lat,myPos.lng]).addTo(map).bindPopup("موقعي المختار");
         showAccuracy();setStatus("تم تحديد موقعك يدويًا.","ok");render();
       });
@@ -128,32 +133,71 @@
         list.appendChild(item);
       }
       if(!myPos){nearest.textContent='اضغط «حدّد موقعي» لعرض الأقرب.';return;}
-      if(!accurate()){
-        nearest.innerHTML=`دقة الموقع غير كافية الآن (${Math.round(myAccuracy)}م). نحتاج إلى 10م أو أقل.`;refreshBtn.hidden=false;return;
-      }
       const first=data[0];
-      nearest.innerHTML=`<b style="font-size:15px">${escapeHtml(first.name)}</b><div class="hint">${escapeHtml(first.area||"")}</div><div style="margin-top:6px">المسافة: <b>${fmtDistance(first.dist)}</b></div><div class="row" style="margin-top:8px"><button class="primary" data-nearest-go>🧭 افتح المسار</button><button data-nearest-zoom>🔎 عرض على الخريطة</button></div>`;
+      const approximate=!accurate()&&Number.isFinite(myAccuracy);
+      const accuracyNote=approximate
+        ? `<div class="hint warn" style="margin-top:6px">المسافة تقديرية لأن دقة الهاتف الحالية ±${Math.round(myAccuracy)}م، ويجري تحسينها في الخلفية.</div>`
+        : locationSource==="manual"
+          ? '<div class="hint" style="margin-top:6px">الحساب مبني على الموقع الذي اخترته يدويًا.</div>'
+          : '';
+      nearest.innerHTML=`<b style="font-size:15px">${escapeHtml(first.name)}</b><div class="hint">${escapeHtml(first.area||"")}</div><div style="margin-top:6px">${approximate?"المسافة التقديرية":"المسافة"}: <b>${fmtDistance(first.dist)}</b></div>${accuracyNote}<div class="row" style="margin-top:8px"><button class="primary" data-nearest-go>🧭 افتح المسار</button><button data-nearest-zoom>🔎 عرض على الخريطة</button></div>`;
       nearest.querySelector("[data-nearest-go]").onclick=()=>goToDevice(first.id);
       nearest.querySelector("[data-nearest-zoom]").onclick=()=>zoomToDevice(first.id);
+      refreshBtn.hidden=!approximate;
     }
 
     function requestLocation(){return new Promise((resolve,reject)=>navigator.geolocation?navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:GPS_TIMEOUT_MS,maximumAge:0}):reject(new Error("unsupported")));}
-    async function updateLocation(){
-      try{const pos=await requestLocation();myPos={lat:pos.coords.latitude,lng:pos.coords.longitude};myAccuracy=pos.coords.accuracy||null;showAccuracy();render();return true}catch{return false;}
+    async function updateLocation({preferBest=false,runId=locationRun}={}){
+      try{
+        const pos=await requestLocation();
+        if(runId!==locationRun)return {ok:false,cancelled:true};
+        const nextAccuracy=Number.isFinite(pos.coords.accuracy)?Number(pos.coords.accuracy):null;
+        const shouldUse=!preferBest||!myPos||!Number.isFinite(myAccuracy)||(Number.isFinite(nextAccuracy)&&nextAccuracy<myAccuracy);
+        if(shouldUse){myPos={lat:pos.coords.latitude,lng:pos.coords.longitude};myAccuracy=nextAccuracy;locationSource="gps";showAccuracy();render();}
+        return {ok:true,cancelled:false};
+      }catch{return {ok:false,cancelled:runId!==locationRun};}
     }
-    function stopAuto(){if(autoTimer)clearInterval(autoTimer);autoTimer=null;autoTries=0;}
+    function stopAuto(){locationRun++;if(autoTimer)clearTimeout(autoTimer);autoTimer=null;autoTries=0;}
     function startAuto(){
-      stopAuto();autoTimer=setInterval(async()=>{autoTries++;const ok=await updateLocation();
-        if(!ok){setStatus("فشل تحديد الموقع. شغّل GPS واسمح للموقع.","danger");refreshBtn.hidden=false;stopAuto();return;}
-        if(accurate()){setStatus(`تم تحسين الدقة إلى ${Math.round(myAccuracy)}م.`,"ok");refreshBtn.hidden=true;centerMap();stopAuto();return;}
-        if(autoTries>=MAX_AUTO_TRIES){setStatus(`لم نصل إلى دقة 10م؛ الدقة الحالية ${Math.round(myAccuracy)}م. جرّب قرب نافذة أو في الخارج.`,"warn");refreshBtn.hidden=false;stopAuto();return;}
-        setStatus(`جارِ تحسين الدقة: المحاولة ${autoTries}/${MAX_AUTO_TRIES}.`,"warn");
-      },AUTO_REFRESH_INTERVAL_MS);
+      stopAuto();
+      const runId=locationRun;
+      const tryNext=async()=>{
+        if(runId!==locationRun)return;
+        autoTries++;
+        setStatus(`جارِ تحسين دقة الهاتف في الخلفية: المحاولة ${autoTries}/${MAX_AUTO_TRIES}.`,"warn");
+        const result=await updateLocation({preferBest:true,runId});
+        if(result.cancelled||runId!==locationRun)return;
+        if(!result.ok){setStatus("تعذر تحديث الدقة؛ تم الاحتفاظ بآخر موقع متاح.","warn");refreshBtn.hidden=false;stopAuto();return;}
+        if(accurate()){setStatus(`تم تحسين دقة الهاتف إلى ±${Math.round(myAccuracy)}م.`,"ok");refreshBtn.hidden=true;centerMap();stopAuto();return;}
+        if(autoTries>=MAX_AUTO_TRIES){setStatus(`اكتمل التحسين. أفضل دقة متاحة ±${Math.round(myAccuracy)}م؛ المسافات المعروضة تقريبية.`,"warn");refreshBtn.hidden=false;stopAuto();return;}
+        autoTimer=setTimeout(tryNext,AUTO_REFRESH_INTERVAL_MS);
+      };
+      autoTimer=setTimeout(tryNext,AUTO_REFRESH_INTERVAL_MS);
     }
-    async function locate(){stopAuto();setStatus("جارِ تحديد موقعك...","warn");const ok=await updateLocation();if(!ok){setStatus("تعذر تحديد الموقع. شغّل GPS ووافق على الإذن.","danger");refreshBtn.hidden=false;return}if(!accurate()){setStatus(`الدقة الحالية ${Math.round(myAccuracy)}م؛ يجري تحسينها تلقائيًا.`,"warn");refreshBtn.hidden=false;startAuto();return}setStatus("تم تحديد موقعك بدقة.","ok");refreshBtn.hidden=true;centerMap();}
+    async function locate(){
+      stopAuto();
+      const runId=locationRun;
+      setStatus("جارِ تحديد موقعك...","warn");
+      const result=await updateLocation({runId});
+      if(result.cancelled)return;
+      if(!result.ok){setStatus("تعذر تحديد الموقع. شغّل GPS ووافق على الإذن.","danger");refreshBtn.hidden=false;return;}
+      centerMap();
+      if(!accurate()){setStatus(`تم عرض أقرب جهاز حسب موقع تقريبي بدقة ±${Math.round(myAccuracy)}م، ويجري التحسين في الخلفية.`,"warn");refreshBtn.hidden=false;startAuto();return;}
+      setStatus(`تم تحديد موقعك بدقة ±${Math.round(myAccuracy)}م.`,"ok");refreshBtn.hidden=true;
+    }
 
-    async function ensureLocation(){if(!myPos)await locate();if(!myPos)return false;if(!accurate()){setStatus("دقة الموقع غير كافية لفتح المسار؛ يجري تحسينها.","warn");startAuto();return false}return true;}
-    window.goToDevice=async id=>{const d=devices.find(x=>x.id===id);if(!d||!await ensureLocation())return;const dist=haversine(myPos.lat,myPos.lng,d.lat,d.lng);if(dist<=NEAR_METERS){setStatus(`أنت قريب جدًا من جهاز «${d.name}» (${Math.round(dist)}م).`,"ok");map.setView([d.lat,d.lng],18);return}window.open(`https://www.google.com/maps/dir/?api=1&origin=${myPos.lat},${myPos.lng}&destination=${d.lat},${d.lng}&travelmode=walking`,"_blank","noopener");};
+    async function ensureLocation(){if(!myPos)await locate();return Boolean(myPos);}
+    window.goToDevice=async id=>{
+      const d=devices.find(x=>x.id===id);if(!d||!await ensureLocation())return;
+      const dist=haversine(myPos.lat,myPos.lng,d.lat,d.lng);
+      if(dist<=NEAR_METERS){
+        if(accurate()){setStatus(`أنت قريب جدًا من جهاز «${d.name}» (${Math.round(dist)}م).`,"ok");}
+        else{setStatus(`المسافة المحسوبة ${Math.round(dist)}م، لكنها تقديرية لأن دقة الهاتف ±${Math.round(myAccuracy)}م.`,"warn");}
+        map.setView([d.lat,d.lng],18);return;
+      }
+      if(!accurate())setStatus(`سيُفتح المسار باستخدام موقع تقريبي بدقة ±${Math.round(myAccuracy)}م.`,"warn");
+      window.open(`https://www.google.com/maps/dir/?api=1&origin=${myPos.lat},${myPos.lng}&destination=${d.lat},${d.lng}&travelmode=walking`,"_blank","noopener");
+    };
     window.zoomToDevice=id=>{const d=devices.find(x=>x.id===id);if(d)map.setView([d.lat,d.lng],17);};
     function centerMap(){if(devices.length){const bounds=L.latLngBounds(devices.map(d=>[d.lat,d.lng]));if(myPos)bounds.extend([myPos.lat,myPos.lng]);map.fitBounds(bounds.pad(.25));}else if(myPos)map.setView([myPos.lat,myPos.lng],16);}
 
