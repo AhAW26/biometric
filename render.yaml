@@ -2,7 +2,7 @@ services:
   - type: web
     name: biometric-map
     runtime: python
-    region: frankfurt    
+    region: frankfurt
     plan: free
     branch: server-v2
     buildCommand: pip install -r requirements.txt
@@ -12,8 +12,6 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.13"
       - key: DATABASE_URL
-        sync: false
-      - key: MAPBOX_ACCESS_TOKEN
         sync: false
       - key: BOOTSTRAP_ADMIN_USERNAME
         value: admin

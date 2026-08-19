@@ -15,7 +15,6 @@ os.environ["BOOTSTRAP_ADMIN_USERNAME"] = "admin"
 os.environ["BOOTSTRAP_ADMIN_DISPLAY_NAME"] = "مدير الاختبار"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "InitialAdmin2026!"
 os.environ["COOKIE_SECURE"] = "1"
-os.environ["MAPBOX_ACCESS_TOKEN"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app import app  # noqa: E402
@@ -31,6 +30,22 @@ def csrf_headers() -> dict[str, str]:
 
 
 def run() -> None:
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["version"] == "2.1.0"
+
+    public_page = client.get("/")
+    assert public_page.status_code == 200
+    assert "tiles.openfreemap.org/styles/liberty" in public_page.text
+    assert "api.mapbox.com" not in public_page.text
+    assert "https://tiles.openfreemap.org" in public_page.headers["content-security-policy"]
+    assert "https://api.mapbox.com" not in public_page.headers["content-security-policy"]
+
+    map_config = client.get("/api/config")
+    assert map_config.status_code == 200
+    assert map_config.json()["map_provider"] == "OpenFreeMap"
+    assert map_config.json()["map_style_url"] == "https://tiles.openfreemap.org/styles/liberty"
+
     public_devices = client.get("/api/devices")
     assert public_devices.status_code == 200
     assert any(item["name"] == "بناية البصمة" for item in public_devices.json())

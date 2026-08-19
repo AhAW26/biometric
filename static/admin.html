@@ -6,7 +6,15 @@
   <meta name="theme-color" content="#0b1220">
   <title>إدارة أجهزة البصمة</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-gl.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "leaflet": "https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.esm.js",
+        "maplibre-gl": "https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-gl.mjs"
+      }
+    }
+  </script>
   <style>
     :root{--bg:#0b1220;--card:#111a2e;--txt:#e8eefc;--mut:#aab6d6;--bd:#223055;--btn:#2b62ff;--ok:#79ffa6;--warn:#ffcb6b;--bad:#ff7a7a}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial;background:var(--bg);color:var(--txt)}
@@ -123,7 +131,12 @@
     </section>
   </main>
 
-  <script>
+  <script type="module">
+    import * as L from "leaflet";
+    import { maplibreGL } from "https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/dist/leaflet-maplibre-gl.mjs";
+
+    const DEFAULT_MAP_STYLE_URL="https://tiles.openfreemap.org/styles/liberty";
+    const MAP_LOAD_TIMEOUT_MS=15000;
     const roleLabels={super_admin:"مدير عام",device_admin:"مسؤول أجهزة",viewer:"مشاهدة فقط"};
     const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
     let currentUser=null,devices=[],editingDeviceId=null,map,deviceLayer,tempMarker,pickMode=false;
@@ -182,8 +195,23 @@
     async function initMap(){
       if(map)return;let config={};try{config=await api("/api/config")}catch{}
       map=L.map("map").setView([32.6,44.05],13);
-      if(config.mapbox_access_token)L.tileLayer(`https://api.mapbox.com/styles/v1/${config.mapbox_style_id||"mapbox/streets-v12"}/tiles/512/{z}/{x}/{y}?access_token=${config.mapbox_access_token}`,{maxZoom:22,tileSize:512,zoomOffset:-1,attribution:"© OpenStreetMap contributors © Mapbox"}).addTo(map);
-      else L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(map);
+      const styleUrl=config.map_style_url||DEFAULT_MAP_STYLE_URL;
+      const openFreeMapAttribution='<a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a> · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+      let baseLayer=null,mapLoaded=false,fallbackLoaded=false;
+      const loadFallback=()=>{
+        if(mapLoaded||fallbackLoaded)return;
+        fallbackLoaded=true;
+        if(baseLayer&&map.hasLayer(baseLayer))map.removeLayer(baseLayer);
+        map.attributionControl.removeAttribution(openFreeMapAttribution);
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}).addTo(map);
+        setMessage("deviceStatus","تعذر تحميل OpenFreeMap؛ تم تشغيل خريطة احتياطية تلقائيًا.","warn");
+      };
+      try{
+        baseLayer=maplibreGL({style:styleUrl}).addTo(map);
+        map.attributionControl.addAttribution(openFreeMapAttribution);
+        baseLayer.getMaplibreMap().once("load",()=>{mapLoaded=true;});
+        setTimeout(loadFallback,MAP_LOAD_TIMEOUT_MS);
+      }catch{loadFallback();}
       deviceLayer=L.layerGroup().addTo(map);
       map.on("click",event=>{if(!pickMode)return;pickMode=false;setCoordinates(event.latlng.lat,event.latlng.lng);setMessage("deviceStatus","تم اختيار الموقع؛ اكتب الاسم واضغط حفظ.","ok");});
       setTimeout(()=>map.invalidateSize(),100);

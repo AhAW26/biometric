@@ -12,14 +12,14 @@
 - جلسات دخول مخزنة في الخادم مع Cookies آمنة وHttpOnly.
 - حماية CSRF، إيقاف محاولات الدخول المتكررة، وسجل تدقيق للعمليات.
 - إجبار كل مستخدم جديد على تغيير كلمة المرور عند أول دخول.
+- استخدام OpenFreeMap للخريطة من دون حساب أو مفتاح API أو فوترة، مع خريطة احتياطية تلقائية عند تعذر التحميل.
 
 ## التشغيل التجريبي على Windows
 
 1. انسخ `.env.example` باسم `.env`.
-2. ضع Mapbox Public Token في `MAPBOX_ACCESS_TOKEN`.
-3. غيّر `BOOTSTRAP_ADMIN_USERNAME` و`BOOTSTRAP_ADMIN_PASSWORD` إلى بيانات المدير الأول. يجب أن تحتوي كلمة المرور 10 محارف على الأقل وحرفًا ورقمًا.
-4. شغّل `start_local.bat`.
-5. افتح `http://127.0.0.1:8000`، ولوحة الإدارة في `http://127.0.0.1:8000/admin`.
+2. غيّر `BOOTSTRAP_ADMIN_USERNAME` و`BOOTSTRAP_ADMIN_PASSWORD` إلى بيانات المدير الأول. يجب أن تحتوي كلمة المرور 10 محارف على الأقل وحرفًا ورقمًا.
+3. شغّل `start_local.bat`.
+4. افتح `http://127.0.0.1:8000`، ولوحة الإدارة في `http://127.0.0.1:8000/admin`.
 
 التشغيل المحلي للاختبار فقط. زر GPS على هاتف الموظف يحتاج رابط HTTPS عام.
 
@@ -33,7 +33,7 @@
 2. أنشئ فرعًا جديدًا باسم `server-v2`.
 3. ارفع **محتويات مجلد المشروع** إلى جذر الفرع الجديد؛ يجب أن يظهر `app.py` و`render.yaml` في المستوى الأول، وليس داخل مجلد إضافي.
 4. اربط Render بالمستودع واختر Blueprint أو Web Service والفرع `server-v2`.
-5. ملف `render.yaml` مهيأ لخطة Render المجانية بغرض الاختبار. قبل الاستخدام الفعلي للموظفين، غيّر Web Service إلى خطة لا تتوقف عند الخمول.
+5. ملف `render.yaml` يحدد منطقة Frankfurt ومهيأ لخطة Render المجانية بغرض الاختبار. قبل الاستخدام الفعلي للموظفين، غيّر Web Service إلى خطة لا تتوقف عند الخمول.
 
 لا تستخدم SQLite في Render المجاني لأن نظام الملفات مؤقت. استخدم رابط PostgreSQL دائمًا في `DATABASE_URL`.
 
@@ -41,7 +41,6 @@
 
 ```text
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
-MAPBOX_ACCESS_TOKEN=MAPBOX_PUBLIC_TOKEN
 BOOTSTRAP_ADMIN_USERNAME=admin
 BOOTSTRAP_ADMIN_DISPLAY_NAME=المدير العام
 BOOTSTRAP_ADMIN_PASSWORD=ONE_TIME_STRONG_PASSWORD
@@ -72,7 +71,7 @@ uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers
 ## ملاحظات أمنية مهمة
 
 - لا ترفع ملف `.env` إلى GitHub.
-- قيّد Mapbox Public Token بعنوان الموقع النهائي من لوحة Mapbox.
+- لا تحتاج OpenFreeMap إلى مفتاح API أو حساب فوترة.
 - أبقِ `COOKIE_SECURE=1` في الموقع العام.
 - استخدم HTTPS فقط، وخذ نسخة احتياطية دورية من PostgreSQL.
 - لا تجعل قاعدة البيانات متاحة مباشرة للإنترنت؛ التطبيق وحده يتصل بها.

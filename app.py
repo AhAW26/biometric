@@ -49,7 +49,6 @@ SESSION_COOKIE = "biometric_session"
 CSRF_COOKIE = "biometric_csrf"
 SESSION_HOURS = max(1, int(os.getenv("SESSION_HOURS", "12")))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").strip().lower() not in {"0", "false", "no"}
-MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "").strip()
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 VALID_ROLES = {"super_admin", "device_admin", "viewer"}
 
@@ -419,7 +418,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.0.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.1.0", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
@@ -432,8 +431,9 @@ async def security_headers(request: Request, call_next):
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com; "
-        "img-src 'self' data: blob: https://unpkg.com https://api.mapbox.com https://*.tile.openstreetmap.org; "
-        "connect-src 'self' https://api.mapbox.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        "img-src 'self' data: blob: https://unpkg.com https://tile.openstreetmap.org; "
+        "connect-src 'self' https://tiles.openfreemap.org; worker-src blob:; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     )
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -465,7 +465,10 @@ def health():
 
 @app.get("/api/config")
 def public_config():
-    return {"mapbox_access_token": MAPBOX_ACCESS_TOKEN, "mapbox_style_id": "mapbox/streets-v12"}
+    return {
+        "map_provider": "OpenFreeMap",
+        "map_style_url": "https://tiles.openfreemap.org/styles/liberty",
+    }
 
 
 @app.get("/api/devices", response_model=list[DeviceOut])
