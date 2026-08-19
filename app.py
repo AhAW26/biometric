@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session as DbSession, mapped_column, relationship, sessionmaker
 
 
@@ -51,6 +51,7 @@ SESSION_HOURS = max(1, int(os.getenv("SESSION_HOURS", "12")))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").strip().lower() not in {"0", "false", "no"}
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 VALID_ROLES = {"super_admin", "device_admin", "viewer"}
+MIN_PASSWORD_LENGTH = 8
 
 
 def utcnow() -> datetime:
@@ -126,11 +127,11 @@ class LoginBody(BaseModel):
 
 class PasswordBody(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
-    new_password: str = Field(min_length=10, max_length=200)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=200)
 
 
 class ResetPasswordBody(BaseModel):
-    new_password: str = Field(min_length=10, max_length=200)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=200)
 
 
 class DeviceBody(BaseModel):
@@ -163,7 +164,7 @@ class DeviceOut(DeviceBody):
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     display_name: str = Field(min_length=1, max_length=120)
-    password: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=200)
     role: str
 
     @field_validator("username")
@@ -250,11 +251,11 @@ def token_hash(value: str) -> str:
 
 
 def password_is_valid(value: str) -> bool:
-    return len(value) >= 10 and any(ch.isalpha() for ch in value) and any(ch.isdigit() for ch in value)
+    return len(value) >= MIN_PASSWORD_LENGTH and any(ch.isalpha() for ch in value) and any(ch.isdigit() for ch in value)
 
 
 def password_error() -> HTTPException:
-    return HTTPException(status_code=422, detail="يجب أن تتكون كلمة المرور من 10 محارف على الأقل وتتضمن حرفًا ورقمًا.")
+    return HTTPException(status_code=422, detail="يجب أن تتكون كلمة المرور من 8 محارف على الأقل وتتضمن حرفًا ورقمًا.")
 
 
 def request_ip(request: Request) -> str:
@@ -288,6 +289,51 @@ def device_dict(device: Device) -> dict[str, Any]:
 
 def active_super_admins(db: DbSession) -> int:
     return db.scalar(select(func.count()).select_from(User).where(User.role == "super_admin", User.is_active.is_(True))) or 0
+
+
+def apply_admin_recovery(db: DbSession) -> bool:
+    """Apply an environment-controlled password reset once per recovery ID."""
+    recovery_id = os.getenv("ADMIN_RECOVERY_ID", "").strip()
+    recovery_password = os.getenv("ADMIN_RECOVERY_PASSWORD", "")
+    recovery_username = os.getenv("ADMIN_RECOVERY_USERNAME", "admin").strip().lower()
+    if not recovery_id and not recovery_password:
+        return False
+    if not recovery_id or not recovery_password or not recovery_username:
+        logger.warning("Admin recovery ignored: both ADMIN_RECOVERY_ID and ADMIN_RECOVERY_PASSWORD are required.")
+        return False
+    if not password_is_valid(recovery_password):
+        logger.warning("Admin recovery ignored: the recovery password does not meet the password policy.")
+        return False
+
+    recovery_marker = hashlib.sha256(recovery_id.encode("utf-8")).hexdigest()
+    already_applied = db.scalar(
+        select(AuditLog.id).where(
+            AuditLog.action == "admin_password_recovery",
+            AuditLog.entity_id == recovery_marker,
+        )
+    )
+    if already_applied:
+        return False
+
+    user = db.scalar(select(User).where(User.username == recovery_username))
+    if not user:
+        logger.warning("Admin recovery ignored: requested user does not exist.")
+        return False
+
+    user.password_hash = PASSWORD_HASHER.hash(recovery_password)
+    user.must_change_password = False
+    user.is_active = True
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    audit(
+        db,
+        user,
+        "admin_password_recovery",
+        "recovery",
+        recovery_marker,
+        {"username": recovery_username},
+    )
+    logger.warning("Administrator password recovery applied once. Remove the recovery environment variables.")
+    return True
 
 
 def get_auth_context(request: Request, db: DbSession = Depends(db_session)) -> AuthContext:
@@ -414,11 +460,12 @@ def initialize_database() -> None:
                 logger.info("Bootstrap administrator created; password change is required on first login.")
             else:
                 logger.warning("No users exist. Set valid BOOTSTRAP_ADMIN_USERNAME and BOOTSTRAP_ADMIN_PASSWORD.")
+        apply_admin_recovery(db)
         db.commit()
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.1.1", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.2.0", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")

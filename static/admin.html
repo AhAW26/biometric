@@ -40,10 +40,10 @@
   <div class="overlay" id="forcePasswordOverlay" hidden>
     <form class="dialog grid" id="forcePasswordForm">
       <h2>تغيير كلمة المرور مطلوب</h2>
-      <div class="mut">اكتب كلمة مرور جديدة من 10 محارف على الأقل وتحتوي حرفًا ورقمًا.</div>
+      <div class="mut">اكتب كلمة مرور جديدة من 8 محارف على الأقل وتحتوي حرفًا ورقمًا.</div>
       <input id="forceCurrentPassword" type="password" placeholder="كلمة المرور الحالية" required>
-      <input id="forceNewPassword" type="password" placeholder="كلمة المرور الجديدة" minlength="10" required>
-      <input id="forceConfirmPassword" type="password" placeholder="تأكيد كلمة المرور" minlength="10" required>
+      <input id="forceNewPassword" type="password" placeholder="كلمة المرور الجديدة" minlength="8" required>
+      <input id="forceConfirmPassword" type="password" placeholder="تأكيد كلمة المرور" minlength="8" required>
       <button class="primary" type="submit">حفظ والمتابعة</button>
       <div id="forcePasswordMessage" class="mut"></div>
     </form>
@@ -95,7 +95,7 @@
           <input id="newUsername" placeholder="اسم المستخدم بالإنجليزية" pattern="[A-Za-z0-9._-]+" required>
           <input id="newDisplayName" placeholder="الاسم الظاهر" required>
           <select id="newRole"><option value="device_admin">مسؤول أجهزة</option><option value="viewer">مشاهدة فقط</option><option value="super_admin">مدير عام</option></select>
-          <input id="newUserPassword" type="password" minlength="10" placeholder="كلمة مرور أولية" required>
+          <input id="newUserPassword" type="password" minlength="8" placeholder="كلمة مرور أولية" required>
           <button class="primary" type="submit">إنشاء الحساب</button>
           <div class="mut">سيُطلب من المستخدم تغيير كلمة المرور عند أول دخول.</div>
           <div id="userStatus" class="mut"></div>
@@ -115,8 +115,8 @@
       <form class="card grid" id="changePasswordForm" style="max-width:520px">
         <h2>تغيير كلمة المرور</h2>
         <input id="currentPassword" type="password" placeholder="كلمة المرور الحالية" required>
-        <input id="newPassword" type="password" minlength="10" placeholder="كلمة المرور الجديدة" required>
-        <input id="confirmPassword" type="password" minlength="10" placeholder="تأكيد كلمة المرور" required>
+        <input id="newPassword" type="password" minlength="8" placeholder="كلمة المرور الجديدة" required>
+        <input id="confirmPassword" type="password" minlength="8" placeholder="تأكيد كلمة المرور" required>
         <button class="primary" type="submit">تغيير كلمة المرور</button>
         <div id="accountStatus" class="mut"></div>
       </form>
@@ -126,7 +126,7 @@
   <script>
     const DEFAULT_TILE_URL="https://tile.openstreetmap.org/{z}/{x}/{y}.png";
     const roleLabels={super_admin:"مدير عام",device_admin:"مسؤول أجهزة",viewer:"مشاهدة فقط"};
-    const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
+    const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",admin_password_recovery:"استعادة كلمة مرور المدير",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
     let currentUser=null,devices=[],editingDeviceId=null,map,deviceLayer,tempMarker,pickMode=false;
     const loginOverlay=document.getElementById("loginOverlay"),appEl=document.getElementById("app"),forceOverlay=document.getElementById("forcePasswordOverlay");
 
@@ -164,7 +164,7 @@
     };
 
     async function changePassword(currentPassword,newPassword,messageId){
-      if(newPassword.length<10||!/[\p{L}]/u.test(newPassword)||!/[0-9]/.test(newPassword))throw new Error("كلمة المرور يجب أن تحتوي 10 محارف على الأقل وحرفًا ورقمًا.");
+      if(newPassword.length<8||!/[\p{L}]/u.test(newPassword)||!/[0-9]/.test(newPassword))throw new Error("كلمة المرور يجب أن تحتوي 8 محارف على الأقل وحرفًا ورقمًا.");
       await api("/api/auth/change-password",{method:"POST",body:JSON.stringify({current_password:currentPassword,new_password:newPassword})});
       setMessage(messageId,"تم تغيير كلمة المرور.","ok");
     }
@@ -223,7 +223,7 @@
       try{
         if(btn.dataset.roleUser){const role=prompt("اكتب الصلاحية: super_admin أو device_admin أو viewer",btn.dataset.currentRole);if(role)await api(`/api/admin/users/${btn.dataset.roleUser}`,{method:"PUT",body:JSON.stringify({role})});}
         if(btn.dataset.toggleUser)await api(`/api/admin/users/${btn.dataset.toggleUser}`,{method:"PUT",body:JSON.stringify({is_active:btn.dataset.active!=="true"})});
-        if(btn.dataset.resetUser){const password=prompt("اكتب كلمة مرور أولية جديدة (10 محارف مع حرف ورقم):");if(password)await api(`/api/admin/users/${btn.dataset.resetUser}/reset-password`,{method:"POST",body:JSON.stringify({new_password:password})});}
+        if(btn.dataset.resetUser){const password=prompt("اكتب كلمة مرور أولية جديدة (8 محارف مع حرف ورقم):");if(password)await api(`/api/admin/users/${btn.dataset.resetUser}/reset-password`,{method:"POST",body:JSON.stringify({new_password:password})});}
         await loadUsers();
       }catch(error){setMessage("userStatus",error.message,"bad");}
     };

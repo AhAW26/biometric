@@ -17,7 +17,7 @@ os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "InitialAdmin2026!"
 os.environ["COOKIE_SECURE"] = "1"
 
 from fastapi.testclient import TestClient  # noqa: E402
-from app import app  # noqa: E402
+from app import SessionLocal, app, apply_admin_recovery  # noqa: E402
 
 
 client = TestClient(app, base_url="https://testserver")
@@ -32,7 +32,7 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.1.1"
+    assert health.json()["version"] == "2.2.0"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
@@ -105,6 +105,22 @@ def run() -> None:
 
     assert client.post("/api/auth/logout", headers=csrf_headers()).status_code == 200
     assert client.get("/api/admin/devices").status_code == 401
+
+    os.environ["ADMIN_RECOVERY_USERNAME"] = "admin"
+    os.environ["ADMIN_RECOVERY_ID"] = "smoke-reset-1"
+    os.environ["ADMIN_RECOVERY_PASSWORD"] = "ResetA12"
+    with SessionLocal() as db:
+        assert apply_admin_recovery(db) is True
+        db.commit()
+    recovered_login = client.post("/api/auth/login", json={"username": "admin", "password": "ResetA12"})
+    assert recovered_login.status_code == 200
+    assert recovered_login.json()["must_change_password"] is False
+    assert client.post("/api/auth/logout", headers=csrf_headers()).status_code == 200
+    with SessionLocal() as db:
+        assert apply_admin_recovery(db) is False
+    os.environ.pop("ADMIN_RECOVERY_USERNAME")
+    os.environ.pop("ADMIN_RECOVERY_ID")
+    os.environ.pop("ADMIN_RECOVERY_PASSWORD")
 
     login_device_admin = client.post(
         "/api/auth/login", json={"username": "device.admin", "password": "DeviceAdmin2026!"}
