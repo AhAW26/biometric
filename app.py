@@ -418,7 +418,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.1.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.1.1", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
@@ -432,7 +432,7 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com; "
         "img-src 'self' data: blob: https://unpkg.com https://tile.openstreetmap.org; "
-        "connect-src 'self' https://tiles.openfreemap.org; worker-src blob:; "
+        "connect-src 'self'; "
         "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     )
     if request.url.scheme == "https":
@@ -466,8 +466,9 @@ def health():
 @app.get("/api/config")
 def public_config():
     return {
-        "map_provider": "OpenFreeMap",
-        "map_style_url": "https://tiles.openfreemap.org/styles/liberty",
+        "map_provider": "OpenStreetMap",
+        "map_tile_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "map_max_zoom": 19,
     }
 
 
