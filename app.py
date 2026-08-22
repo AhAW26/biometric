@@ -465,7 +465,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.3.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.5.0", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")

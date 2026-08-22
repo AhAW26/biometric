@@ -32,7 +32,7 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.3.0"
+    assert health.json()["version"] == "2.5.0"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
@@ -45,6 +45,19 @@ def run() -> None:
     assert "setInterval(async" not in public_page.text
     assert "setTimeout(tryNext" in public_page.text
     assert "دقة الموقع غير كافية الآن" not in public_page.text
+    assert 'id="deviceSearch"' in public_page.text
+    assert "البحث باسم الجهاز أو الموقع" in public_page.text
+    assert "function normalizeSearch" in public_page.text
+    assert "function filterDevices" in public_page.text
+    assert "function renderDeviceCards" in public_page.text
+    assert "renderDeviceCards(list,data.slice(0,10))" in public_page.text
+    assert "renderDeviceCards(searchResultsEl,matches)" in public_page.text
+    assert "لا يوجد جهاز مطابق" in public_page.text
+    assert 'id="searchResults"' in public_page.text
+    assert public_page.text.index('id="deviceSearch"') < public_page.text.index('id="map"')
+    assert "لا يتم تخزينه في خادم الموقع" in public_page.text
+    assert "Google Maps" in public_page.text
+    assert '<a href="/admin"' not in public_page.text
 
     map_config = client.get("/api/config")
     assert map_config.status_code == 200

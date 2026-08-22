@@ -17,6 +17,9 @@
     button.primary{background:var(--btn);border-color:transparent}button:disabled{opacity:.5;cursor:not-allowed}.big{font-size:15px;font-weight:800}.list{display:grid;gap:8px;margin-top:10px}
     .item{border:1px solid var(--bd);border-radius:14px;padding:10px;background:rgba(255,255,255,.02)}.item .top{display:flex;justify-content:space-between;gap:10px}
     .pill{border:1px solid var(--bd);background:rgba(255,255,255,.03);padding:6px 10px;border-radius:999px;font-size:12px;color:var(--mut)}
+    input[type="search"]{flex:1 1 260px;min-width:0;border:1px solid var(--bd);background:#0d1629;color:var(--txt);padding:11px 12px;border-radius:12px;font-size:14px;outline:none}
+    input[type="search"]:focus{border-color:var(--btn);box-shadow:0 0 0 2px rgba(43,98,255,.18)}.search-row button{flex:0 0 auto}
+    .privacy-note{margin-top:9px;padding:9px 10px;border:1px solid var(--bd);border-radius:11px;background:rgba(43,98,255,.08);color:var(--mut);font-size:12px;line-height:1.6}
     a{color:var(--mut);text-decoration:none;font-size:12px}.ok{color:var(--ok)}.warn{color:var(--warn)}.danger{color:var(--bad)}
     @media(max-width:600px){#map{height:52vh;min-height:320px}button{flex:1 1 auto}.secondary-actions button{font-size:12px;padding:9px}}
   </style>
@@ -24,7 +27,6 @@
 <body>
   <header>
     <div><h1>أقرب جهاز بصمة</h1><div class="mut">حدّد موقعك لعرض أقرب جهاز والمسار إليه.</div></div>
-    <a href="/admin" title="للإدارة فقط">⚙️ الإدارة</a>
   </header>
 
   <main class="wrap">
@@ -40,6 +42,18 @@
         <button id="reloadBtn">🔄 تحديث الأجهزة</button>
       </div>
       <div class="hint" id="status" style="margin-top:8px">جارِ تشغيل البرنامج...</div>
+      <div class="privacy-note">🔒 يُستخدم موقعك داخل هاتفك لحساب المسافة ولا يتم تخزينه في خادم الموقع. عند فتح مسار بعيد، تُرسل نقطة البداية والوجهة إلى Google Maps.</div>
+    </section>
+
+    <section class="card">
+      <div class="big">البحث عن جهاز</div>
+      <div class="hint">ابحث باسم الجهاز أو موقعه للوصول إليه مباشرة.</div>
+      <div class="row search-row" style="margin-top:8px">
+        <input id="deviceSearch" type="search" placeholder="مثال: بناية البصمة أو البوابة الرئيسية" aria-label="البحث باسم الجهاز أو الموقع" autocomplete="off">
+        <button id="clearSearchBtn" hidden>مسح البحث</button>
+      </div>
+      <div class="hint" id="searchSummary" style="margin-top:7px">اكتب جزءًا من اسم الجهاز أو موقعه.</div>
+      <div class="list" id="searchResults" hidden></div>
     </section>
 
     <div id="map" aria-label="خريطة أجهزة البصمة"></div>
@@ -51,7 +65,7 @@
 
     <section class="card">
       <div class="big">الأجهزة الأقرب</div>
-      <div class="hint">تُرتب الأجهزة حسب المسافة بعد تحديد موقعك.</div>
+      <div class="hint">تُعرض أقرب 10 أجهزة بعد تحديد موقعك.</div>
       <div class="list" id="deviceList"></div>
     </section>
   </main>
@@ -72,6 +86,10 @@
     const statusEl = document.getElementById("status");
     const accuracyEl = document.getElementById("accuracy");
     const refreshBtn = document.getElementById("refreshBtn");
+    const searchEl = document.getElementById("deviceSearch");
+    const clearSearchBtn = document.getElementById("clearSearchBtn");
+    const searchSummaryEl = document.getElementById("searchSummary");
+    const searchResultsEl = document.getElementById("searchResults");
 
     function escapeHtml(value){return String(value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
     function setStatus(message, cls=""){statusEl.className=`hint ${cls}`;statusEl.textContent=message;}
@@ -83,6 +101,17 @@
       accuracyEl.hidden=false;accuracyEl.textContent=`دقة الهاتف: ±${Math.round(myAccuracy)}م`;
     }
     function accurate(){return locationSource==="manual"||(Number.isFinite(myAccuracy)&&myAccuracy<=REQUIRED_ACCURACY_M);}
+    function normalizeSearch(value){
+      return String(value||"").toLocaleLowerCase("ar").normalize("NFKD")
+        .replace(/[\u064b-\u065f\u0670\u06d6-\u06ed]/g,"").replace(/ـ/g,"")
+        .replace(/[إأآٱ]/g,"ا").replace(/[ؤ]/g,"و").replace(/[ئى]/g,"ي").replace(/ة/g,"ه")
+        .replace(/\s+/g," ").trim();
+    }
+    function filterDevices(data,rawQuery){
+      const query=normalizeSearch(rawQuery),terms=query.split(" ").filter(Boolean);
+      if(!terms.length)return data;
+      return data.filter(device=>{const searchable=normalizeSearch(`${device.name} ${device.area||""}`);return terms.every(term=>searchable.includes(term));});
+    }
 
     async function api(url){const response=await fetch(url,{cache:"no-store"});if(!response.ok)throw new Error("network");return response.json();}
 
@@ -123,15 +152,32 @@
       renderList();
     }
 
-    function renderList(){
-      const list=document.getElementById("deviceList"),nearest=document.getElementById("nearest");list.innerHTML="";
-      if(!devices.length){list.innerHTML='<div class="hint">لا توجد أجهزة مسجلة.</div>';nearest.textContent="لا توجد أجهزة مسجلة.";return;}
-      const data=sortedDevices();
-      for(const d of data.slice(0,10)){
+    function renderDeviceCards(container,data){
+      for(const d of data){
         const item=document.createElement("div");item.className="item";
         item.innerHTML=`<div class="top"><div><b>${escapeHtml(d.name)}</b><div class="hint">${escapeHtml(d.area||"")}</div></div><div><b>${myPos?fmtDistance(d.dist):"-"}</b><div class="hint">المسافة</div></div></div><div class="row" style="margin-top:8px"><button class="primary" data-go="${d.id}">🧭 اذهب</button><button data-zoom="${d.id}">🔎 عرض</button></div>`;
-        list.appendChild(item);
+        container.appendChild(item);
       }
+    }
+
+    function renderList(){
+      const list=document.getElementById("deviceList"),nearest=document.getElementById("nearest");
+      list.innerHTML="";searchResultsEl.innerHTML="";
+      const rawQuery=searchEl.value.trim();
+      clearSearchBtn.hidden=!rawQuery;searchResultsEl.hidden=!rawQuery;
+      if(!devices.length){
+        list.innerHTML='<div class="hint">لا توجد أجهزة مسجلة.</div>';nearest.textContent="لا توجد أجهزة مسجلة.";
+        searchSummaryEl.textContent="لا توجد أجهزة مسجلة حاليًا.";
+        if(rawQuery)searchResultsEl.innerHTML='<div class="hint">لا توجد أجهزة للبحث.</div>';
+        return;
+      }
+      const data=sortedDevices(),matches=filterDevices(data,rawQuery);
+      renderDeviceCards(list,data.slice(0,10));
+      if(rawQuery){
+        searchSummaryEl.textContent=`نتائج البحث: ${matches.length} من ${devices.length} جهاز.`;
+        if(matches.length)renderDeviceCards(searchResultsEl,matches);
+        else searchResultsEl.innerHTML='<div class="hint warn">لا يوجد جهاز مطابق. جرّب جزءًا من الاسم أو الموقع.</div>';
+      }else searchSummaryEl.textContent="اكتب جزءًا من اسم الجهاز أو موقعه.";
       if(!myPos){nearest.textContent='اضغط «حدّد موقعي» لعرض الأقرب.';return;}
       const first=data[0];
       const approximate=!accurate()&&Number.isFinite(myAccuracy);
@@ -198,7 +244,7 @@
       if(!accurate())setStatus(`سيُفتح المسار باستخدام موقع تقريبي بدقة ±${Math.round(myAccuracy)}م.`,"warn");
       window.open(`https://www.google.com/maps/dir/?api=1&origin=${myPos.lat},${myPos.lng}&destination=${d.lat},${d.lng}&travelmode=walking`,"_blank","noopener");
     };
-    window.zoomToDevice=id=>{const d=devices.find(x=>x.id===id);if(d)map.setView([d.lat,d.lng],17);};
+    window.zoomToDevice=id=>{const d=devices.find(x=>x.id===id);if(d){map.setView([d.lat,d.lng],17);document.getElementById("map").scrollIntoView({behavior:"smooth",block:"center"});}};
     function centerMap(){if(devices.length){const bounds=L.latLngBounds(devices.map(d=>[d.lat,d.lng]));if(myPos)bounds.extend([myPos.lat,myPos.lng]);map.fitBounds(bounds.pad(.25));}else if(myPos)map.setView([myPos.lat,myPos.lng],16);}
 
     document.getElementById("locateBtn").onclick=locate;
@@ -206,7 +252,11 @@
     document.getElementById("manualBtn").onclick=()=>{stopAuto();manualMode=true;setStatus("اضغط على الخريطة لتحديد موقعك يدويًا.","warn");};
     document.getElementById("centerBtn").onclick=centerMap;
     document.getElementById("reloadBtn").onclick=async()=>{setStatus("جارِ تحديث قائمة الأجهزة...","warn");await loadDevices();render();centerMap();setStatus("تم تحديث الأجهزة.","ok");};
-    document.getElementById("deviceList").onclick=event=>{const button=event.target.closest("button");if(!button)return;if(button.dataset.go)goToDevice(button.dataset.go);if(button.dataset.zoom)zoomToDevice(button.dataset.zoom);};
+    function handleDeviceAction(event){const button=event.target.closest("button");if(!button)return;if(button.dataset.go)goToDevice(button.dataset.go);if(button.dataset.zoom)zoomToDevice(button.dataset.zoom);}
+    document.getElementById("deviceList").onclick=handleDeviceAction;
+    searchResultsEl.onclick=handleDeviceAction;
+    searchEl.oninput=renderList;
+    clearSearchBtn.onclick=()=>{searchEl.value="";renderList();searchEl.focus();};
 
     (async()=>{try{await initMap();await loadDevices();render();centerMap();setStatus("جاهز.","ok");}catch{setStatus("تعذر تشغيل الخريطة. تحقق من اتصال الإنترنت ثم أعد المحاولة.","danger");}})();
   </script>
