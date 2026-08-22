@@ -4,13 +4,16 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
+import httpx
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from dotenv import load_dotenv
@@ -53,6 +56,17 @@ PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 VALID_ROLES = {"super_admin", "device_admin", "viewer"}
 MIN_PASSWORD_LENGTH = 8
 MAX_DEVICE_IMPORT = 5000
+MAX_LOCATION_RESPONSE_BYTES = 512 * 1024
+ALLOWED_LOCATION_HOSTS = {
+    "google.com",
+    "www.google.com",
+    "maps.google.com",
+    "maps.app.goo.gl",
+    "goo.gl",
+    "maps.apple.com",
+    "openstreetmap.org",
+    "www.openstreetmap.org",
+}
 
 
 def utcnow() -> datetime:
@@ -173,6 +187,18 @@ class DeviceImportItem(DeviceBody):
 
 class DeviceImportBody(BaseModel):
     devices: list[DeviceImportItem] = Field(min_length=1, max_length=MAX_DEVICE_IMPORT)
+
+
+class LocationResolveBody(BaseModel):
+    value: str = Field(min_length=1, max_length=3000)
+
+    @field_validator("value")
+    @classmethod
+    def clean_value(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("location value is required")
+        return cleaned
 
 
 class UserCreate(BaseModel):
@@ -299,6 +325,130 @@ def audit(
 
 def device_dict(device: Device) -> dict[str, Any]:
     return {"id": device.id, "name": device.name, "area": device.area, "lat": device.lat, "lng": device.lng}
+
+
+COORDINATE_NUMBER = r"-?\d{1,3}(?:\.\d+)?"
+COORDINATE_PAIR = re.compile(rf"({COORDINATE_NUMBER})\s*[,،]\s*({COORDINATE_NUMBER})")
+
+
+def valid_coordinate_pair(lat_value: str | float, lng_value: str | float) -> tuple[float, float] | None:
+    try:
+        lat = float(lat_value)
+        lng = float(lng_value)
+    except (TypeError, ValueError):
+        return None
+    if -90 <= lat <= 90 and -180 <= lng <= 180:
+        return lat, lng
+    return None
+
+
+def coordinates_from_text(value: str) -> tuple[float, float] | None:
+    decoded = unquote(value.strip())
+    direct = re.fullmatch(rf"\s*({COORDINATE_NUMBER})\s*[,،]\s*({COORDINATE_NUMBER})\s*", decoded)
+    if direct:
+        return valid_coordinate_pair(direct.group(1), direct.group(2))
+
+    parsed = urlparse(decoded)
+    query = parse_qs(parsed.query)
+    if "mlat" in query and "mlon" in query:
+        coordinates = valid_coordinate_pair(query["mlat"][0], query["mlon"][0])
+        if coordinates:
+            return coordinates
+    for key in ("q", "query", "ll", "center", "destination"):
+        for item in query.get(key, []):
+            match = COORDINATE_PAIR.search(item)
+            if match:
+                coordinates = valid_coordinate_pair(match.group(1), match.group(2))
+                if coordinates:
+                    return coordinates
+
+    patterns = (
+        re.compile(rf"@({COORDINATE_NUMBER}),({COORDINATE_NUMBER})(?:,|\b)"),
+        re.compile(rf"!3d({COORDINATE_NUMBER})!4d({COORDINATE_NUMBER})"),
+        re.compile(rf"#map=\d+(?:\.\d+)?/({COORDINATE_NUMBER})/({COORDINATE_NUMBER})"),
+    )
+    for pattern in patterns:
+        match = pattern.search(decoded)
+        if match:
+            coordinates = valid_coordinate_pair(match.group(1), match.group(2))
+            if coordinates:
+                return coordinates
+    return None
+
+
+def extract_location_url(value: str) -> str | None:
+    match = re.search(r"https://[^\s<>\"']+", value)
+    if not match:
+        return None
+    return match.group(0).rstrip(".,،؛;!)]}")
+
+
+def allowed_location_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname is not None
+            and parsed.hostname.lower().rstrip(".") in ALLOWED_LOCATION_HOSTS
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in {None, 443}
+        )
+    except ValueError:
+        return False
+
+
+def resolve_location_value(
+    value: str,
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[float, float, str]:
+    location_url = extract_location_url(value)
+    if location_url and not allowed_location_url(location_url):
+        raise ValueError("يُسمح فقط بروابط Google Maps أو Apple Maps أو OpenStreetMap.")
+
+    coordinates = coordinates_from_text(location_url or value)
+    if coordinates:
+        return coordinates[0], coordinates[1], location_url or value
+
+    current_url = location_url
+    if not current_url:
+        raise ValueError("ألصق رابط موقع من واتساب أو إحداثيات بالشكل Latitude, Longitude.")
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; BiometricMap/2.7)"}
+    try:
+        with httpx.Client(timeout=10, follow_redirects=False, transport=transport, headers=headers) as client:
+            for _ in range(7):
+                coordinates = coordinates_from_text(current_url)
+                if coordinates:
+                    return coordinates[0], coordinates[1], current_url
+                if not allowed_location_url(current_url):
+                    raise ValueError("أعاد الرابط التوجيه إلى موقع غير مسموح.")
+
+                with client.stream("GET", current_url) as response:
+                    location = response.headers.get("location")
+                    if 300 <= response.status_code < 400 and location:
+                        next_url = urljoin(current_url, location)
+                        if not allowed_location_url(next_url):
+                            raise ValueError("أعاد الرابط التوجيه إلى موقع غير مسموح.")
+                        current_url = next_url
+                        continue
+                    if response.status_code >= 400:
+                        raise ValueError("تعذر فتح رابط الموقع المرسل.")
+
+                    content = bytearray()
+                    for chunk in response.iter_bytes():
+                        remaining = MAX_LOCATION_RESPONSE_BYTES - len(content)
+                        if remaining <= 0:
+                            break
+                        content.extend(chunk[:remaining])
+                    coordinates = coordinates_from_text(content.decode("utf-8", errors="ignore"))
+                    if coordinates:
+                        return coordinates[0], coordinates[1], current_url
+                    break
+    except httpx.RequestError as exc:
+        raise ValueError("تعذر الاتصال بخدمة الخرائط لاستخراج الموقع.") from exc
+
+    raise ValueError("تعذر استخراج الإحداثيات من الرابط. اطلب إرسال الموقع الحالي مرة أخرى.")
 
 
 def active_super_admins(db: DbSession) -> int:
@@ -479,7 +629,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.6.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.7.0", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
@@ -616,6 +766,18 @@ def admin_devices(
     db: DbSession = Depends(db_session),
 ):
     return list(db.scalars(select(Device).order_by(Device.name)).all())
+
+
+@app.post("/api/admin/location/resolve")
+def resolve_location(
+    body: LocationResolveBody,
+    auth: AuthContext = Depends(require_roles("super_admin", "device_admin", write=True)),
+):
+    try:
+        lat, lng, resolved_url = resolve_location_value(body.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "lat": lat, "lng": lng, "resolved_url": resolved_url}
 
 
 @app.post("/api/admin/devices", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)

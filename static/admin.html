@@ -13,6 +13,7 @@
     header{padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);z-index:1000}
     h1{font-size:17px;margin:0}h2{font-size:15px;margin:0 0 10px}.wrap{padding:10px;display:grid;gap:10px;max-width:1250px;margin:auto}.grid{display:grid;gap:9px}.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .location-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.location-row input{min-width:0}
     button,input,select,textarea{border:1px solid var(--bd);background:var(--card);color:var(--txt);padding:10px 12px;border-radius:11px;font-size:13px}button{cursor:pointer}button.primary{background:var(--btn);border-color:transparent}button.danger{border-color:#703448;color:#ff9aae}button:disabled{opacity:.45;cursor:not-allowed}
     input,select{width:100%}.mut{font-size:12px;color:var(--mut);line-height:1.55}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
     #map{height:52vh;min-height:390px;border:1px solid var(--bd);border-radius:14px}.tabs{display:flex;gap:7px;flex-wrap:wrap}.tabs button.active{background:var(--btn);border-color:transparent}.tab[hidden]{display:none}
@@ -21,7 +22,7 @@
     table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-bottom:1px solid var(--bd);padding:8px;text-align:right;vertical-align:top}.table-wrap{overflow:auto;max-height:520px}
     .overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:14px}.overlay[hidden]{display:none}.dialog{width:min(440px,100%);background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px}
     @media(min-width:950px){.device-layout{grid-template-columns:1.25fr .75fr;align-items:start}.side-sticky{position:sticky;top:78px}}
-    @media(max-width:600px){#map{min-height:330px;height:45vh}.two{grid-template-columns:1fr}.row>button{flex:1 1 auto}}
+    @media(max-width:600px){#map{min-height:330px;height:45vh}.two,.location-row{grid-template-columns:1fr}.row>button{flex:1 1 auto}}
   </style>
 </head>
 <body>
@@ -79,6 +80,11 @@
             <h2 id="deviceFormTitle">إضافة جهاز</h2>
             <input id="deviceName" placeholder="اسم الجهاز" maxlength="150" required>
             <input id="deviceArea" placeholder="الموقع أو الوصف المختصر" maxlength="250">
+            <div class="grid">
+              <label class="mut" for="locationLink">رابط Location المرسل عبر واتساب</label>
+              <div class="location-row"><input id="locationLink" type="text" maxlength="3000" placeholder="الصق رابط الموقع أو الإحداثيات هنا"><button type="button" id="resolveLocationBtn" class="write-device">📍 استخراج الموقع</button></div>
+              <div class="mut">الصق الرابط واضغط استخراج؛ لا تحتاج إلى فتحه في تطبيق الخرائط.</div>
+            </div>
             <div class="two"><input id="deviceLat" type="number" step="any" placeholder="Latitude" required><input id="deviceLng" type="number" step="any" placeholder="Longitude" required></div>
             <div class="row"><button class="primary write-device" type="submit">💾 حفظ في الخادم</button><button type="button" id="clearDeviceBtn">مسح</button></div>
             <div class="mut">بعد الحفظ يظهر التغيير فورًا لجميع الموظفين دون تصدير أو رفع ملف.</div>
@@ -90,7 +96,7 @@
             <div class="mut">الاستيراد يحدّث الأجهزة ذات المعرّف نفسه ويضيف الأجهزة المفقودة، ولا يحذف أي جهاز موجود.</div>
             <div id="backupStatus" class="mut"></div>
           </div>
-          <div class="card"><div class="item-head"><h2>الأجهزة المسجلة</h2><a href="/devices.json" target="_blank" style="color:var(--mut);font-size:12px">عرض JSON</a></div><div class="list" id="deviceList"></div></div>
+          <div class="card"><div class="item-head"><h2>الأجهزة المسجلة <span class="badge" id="deviceCount">0</span></h2><a href="/devices.json" target="_blank" style="color:var(--mut);font-size:12px">عرض JSON</a></div><div class="list" id="deviceList"></div></div>
         </aside>
       </div>
     </section>
@@ -156,7 +162,7 @@
       document.querySelectorAll(".super-only").forEach(el=>el.hidden=currentUser.role!=="super_admin");
       const canWrite=["super_admin","device_admin"].includes(currentUser.role);
       document.querySelectorAll(".write-device").forEach(el=>el.disabled=!canWrite);
-      for(const id of ["deviceName","deviceArea","deviceLat","deviceLng"])document.getElementById(id).disabled=!canWrite;
+      for(const id of ["deviceName","deviceArea","locationLink","deviceLat","deviceLng"])document.getElementById(id).disabled=!canWrite;
     }
     async function enterApp(user){currentUser=user;loginOverlay.hidden=true;forceOverlay.hidden=true;appEl.hidden=false;applyRole();await initMap();await loadDevices();}
 
@@ -201,6 +207,7 @@
     async function loadDevices(){try{devices=await api("/api/admin/devices");renderDevices();centerMap();setMessage("deviceStatus","تم تحميل الأجهزة من الخادم.","ok");}catch(error){setMessage("deviceStatus",error.message,"bad");}}
     function renderDevices(){
       deviceLayer.clearLayers();const list=document.getElementById("deviceList");list.innerHTML="";const canWrite=["super_admin","device_admin"].includes(currentUser.role);
+      document.getElementById("deviceCount").textContent=devices.length;
       if(!devices.length){list.innerHTML='<div class="mut">لا توجد أجهزة مسجلة.</div>';return;}
       for(const d of devices){
         L.marker([d.lat,d.lng]).addTo(deviceLayer).bindPopup(`<b>${escapeHtml(d.name)}</b><div>${escapeHtml(d.area||"")}</div>`);
@@ -217,6 +224,10 @@
     document.getElementById("deviceList").onclick=async event=>{const btn=event.target.closest("button");if(!btn)return;const id=btn.dataset.zoom||btn.dataset.edit||btn.dataset.delete,d=devices.find(x=>x.id===id);if(!d)return;if(btn.dataset.zoom)map.setView([d.lat,d.lng],18);if(btn.dataset.edit)editDevice(id);if(btn.dataset.delete&&confirm(`حذف الجهاز «${d.name}»؟`)){try{await api(`/api/admin/devices/${id}`,{method:"DELETE"});await loadDevices();}catch(error){setMessage("deviceStatus",error.message,"bad");}}};
     document.getElementById("pickBtn").onclick=()=>{pickMode=true;setMessage("deviceStatus","اضغط على الخريطة لتحديد موقع الجهاز.","warn");};
     document.getElementById("gpsBtn").onclick=()=>{if(!navigator.geolocation){setMessage("deviceStatus","المتصفح لا يدعم GPS.","bad");return}setMessage("deviceStatus","جارِ التقاط الموقع...","warn");navigator.geolocation.getCurrentPosition(pos=>{setCoordinates(pos.coords.latitude,pos.coords.longitude);setMessage("deviceStatus",`تم التقاط الموقع بدقة تقارب ${Math.round(pos.coords.accuracy||0)}م.`,"ok");},()=>setMessage("deviceStatus","تعذر التقاط الموقع؛ تحقق من إذن GPS.","bad"),{enableHighAccuracy:true,timeout:15000,maximumAge:0});};
+    document.getElementById("resolveLocationBtn").onclick=async()=>{
+      const value=document.getElementById("locationLink").value.trim();if(!value){setMessage("deviceStatus","ألصق رابط الموقع المرسل عبر واتساب أولًا.","bad");return;}
+      try{setMessage("deviceStatus","جارِ استخراج الإحداثيات من الرابط...","warn");const result=await api("/api/admin/location/resolve",{method:"POST",body:JSON.stringify({value})});setCoordinates(result.lat,result.lng);setMessage("deviceStatus",`تم استخراج الموقع: ${Number(result.lat).toFixed(6)}, ${Number(result.lng).toFixed(6)}. أكمل اسم الجهاز واضغط حفظ.`,"ok");}catch(error){setMessage("deviceStatus",error.message,"bad");}
+    };
     document.getElementById("centerBtn").onclick=centerMap;document.getElementById("reloadDevicesBtn").onclick=loadDevices;document.getElementById("clearDeviceBtn").onclick=clearDeviceForm;
 
     function backupFilename(){return `biometric_devices_backup_${new Date().toISOString().replace(/[:.]/g,"-")}.json`;}

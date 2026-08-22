@@ -17,7 +17,8 @@ os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "InitialAdmin2026!"
 os.environ["COOKIE_SECURE"] = "1"
 
 from fastapi.testclient import TestClient  # noqa: E402
-from app import SessionLocal, app, apply_admin_recovery  # noqa: E402
+import httpx  # noqa: E402
+from app import SessionLocal, app, apply_admin_recovery, coordinates_from_text, resolve_location_value  # noqa: E402
 
 
 client = TestClient(app, base_url="https://testserver")
@@ -32,7 +33,7 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.6.0"
+    assert health.json()["version"] == "2.7.0"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
@@ -64,8 +65,39 @@ def run() -> None:
     assert 'id="exportDevicesBtn"' in admin_page.text
     assert 'id="importDevicesBtn"' in admin_page.text
     assert 'id="importDevicesFile"' in admin_page.text
+    assert 'id="deviceCount"' in admin_page.text
+    assert 'id="locationLink"' in admin_page.text
+    assert 'id="resolveLocationBtn"' in admin_page.text
     assert "/api/admin/devices/import" in admin_page.text
+    assert "/api/admin/location/resolve" in admin_page.text
     assert "ولا يحذف أي جهاز موجود" in admin_page.text
+    assert "لا تحتاج إلى فتحه في تطبيق الخرائط" in admin_page.text
+
+    assert coordinates_from_text("32.357802, 44.093349") == (32.357802, 44.093349)
+    assert coordinates_from_text("https://maps.google.com/?q=32.357802%2C44.093349") == (32.357802, 44.093349)
+    assert coordinates_from_text("https://www.google.com/maps/place/test/@32.357802,44.093349,18z") == (
+        32.357802,
+        44.093349,
+    )
+    assert coordinates_from_text("https://www.google.com/maps/data=!3d32.357802!4d44.093349") == (
+        32.357802,
+        44.093349,
+    )
+
+    def location_redirect(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "maps.app.goo.gl":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://www.google.com/maps/place/test/@32.357802,44.093349,18z"},
+                request=request,
+            )
+        return httpx.Response(200, request=request)
+
+    short_location = resolve_location_value(
+        "https://maps.app.goo.gl/test-link",
+        transport=httpx.MockTransport(location_redirect),
+    )
+    assert short_location[:2] == (32.357802, 44.093349)
 
     map_config = client.get("/api/config")
     assert map_config.status_code == 200
@@ -76,6 +108,10 @@ def run() -> None:
     assert public_devices.status_code == 200
     assert any(item["name"] == "بناية البصمة" for item in public_devices.json())
     assert client.get("/api/admin/devices").status_code == 401
+    assert client.post(
+        "/api/admin/location/resolve",
+        json={"value": "https://maps.google.com/?q=32.357802,44.093349"},
+    ).status_code == 401
     assert client.post(
         "/api/admin/devices/import",
         json={"devices": [{"id": "unauthorized", "name": "مرفوض", "area": "", "lat": 32.3, "lng": 44.0}]},
@@ -98,6 +134,22 @@ def run() -> None:
         headers=csrf_headers(),
     )
     assert changed.status_code == 200, changed.text
+
+    resolved_location = client.post(
+        "/api/admin/location/resolve",
+        json={"value": "موقع الجهاز https://maps.google.com/?q=32.357802%2C44.093349"},
+        headers=csrf_headers(),
+    )
+    assert resolved_location.status_code == 200, resolved_location.text
+    assert resolved_location.json()["lat"] == 32.357802
+    assert resolved_location.json()["lng"] == 44.093349
+
+    rejected_location = client.post(
+        "/api/admin/location/resolve",
+        json={"value": "https://example.com/?q=32.357802,44.093349"},
+        headers=csrf_headers(),
+    )
+    assert rejected_location.status_code == 400
 
     new_user = client.post(
         "/api/admin/users",
