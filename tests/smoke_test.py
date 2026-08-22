@@ -32,7 +32,7 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.5.0"
+    assert health.json()["version"] == "2.6.0"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
@@ -59,6 +59,14 @@ def run() -> None:
     assert "Google Maps" in public_page.text
     assert '<a href="/admin"' not in public_page.text
 
+    admin_page = client.get("/admin")
+    assert admin_page.status_code == 200
+    assert 'id="exportDevicesBtn"' in admin_page.text
+    assert 'id="importDevicesBtn"' in admin_page.text
+    assert 'id="importDevicesFile"' in admin_page.text
+    assert "/api/admin/devices/import" in admin_page.text
+    assert "ولا يحذف أي جهاز موجود" in admin_page.text
+
     map_config = client.get("/api/config")
     assert map_config.status_code == 200
     assert map_config.json()["map_provider"] == "OpenStreetMap"
@@ -68,6 +76,10 @@ def run() -> None:
     assert public_devices.status_code == 200
     assert any(item["name"] == "بناية البصمة" for item in public_devices.json())
     assert client.get("/api/admin/devices").status_code == 401
+    assert client.post(
+        "/api/admin/devices/import",
+        json={"devices": [{"id": "unauthorized", "name": "مرفوض", "area": "", "lat": 32.3, "lng": 44.0}]},
+    ).status_code == 401
 
     login = client.post("/api/auth/login", json={"username": "admin", "password": "InitialAdmin2026!"})
     assert login.status_code == 200, login.text
@@ -116,9 +128,83 @@ def run() -> None:
     assert updated.json()["area"] == "المدخل الجديد"
     assert len(client.get("/devices.json").json()) == 2
 
+    imported = client.post(
+        "/api/admin/devices/import",
+        json={
+            "devices": [
+                {
+                    "id": device_id,
+                    "name": "البوابة الرئيسية",
+                    "area": "مستعاد من النسخة",
+                    "lat": 32.362,
+                    "lng": 44.092,
+                },
+                {
+                    "id": "backup-device-1",
+                    "name": "جهاز النسخة الاحتياطية",
+                    "area": "المبنى الإداري",
+                    "lat": 32.38,
+                    "lng": 44.11,
+                },
+            ]
+        },
+        headers=csrf_headers(),
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json() == {"ok": True, "total": 2, "created": 1, "updated": 1, "unchanged": 0}
+    assert len(client.get("/devices.json").json()) == 3
+    assert any(item["area"] == "مستعاد من النسخة" for item in client.get("/devices.json").json())
+
+    imported_again = client.post(
+        "/api/admin/devices/import",
+        json={
+            "devices": [
+                {
+                    "id": device_id,
+                    "name": "البوابة الرئيسية",
+                    "area": "مستعاد من النسخة",
+                    "lat": 32.362,
+                    "lng": 44.092,
+                },
+                {
+                    "id": "backup-device-1",
+                    "name": "جهاز النسخة الاحتياطية",
+                    "area": "المبنى الإداري",
+                    "lat": 32.38,
+                    "lng": 44.11,
+                },
+            ]
+        },
+        headers=csrf_headers(),
+    )
+    assert imported_again.status_code == 200, imported_again.text
+    assert imported_again.json()["unchanged"] == 2
+
+    duplicate_import = client.post(
+        "/api/admin/devices/import",
+        json={
+            "devices": [
+                {"id": "same-id", "name": "الأول", "area": "", "lat": 32.3, "lng": 44.0},
+                {"id": "same-id", "name": "الثاني", "area": "", "lat": 32.4, "lng": 44.1},
+            ]
+        },
+        headers=csrf_headers(),
+    )
+    assert duplicate_import.status_code == 400
+    assert len(client.get("/devices.json").json()) == 3
+
+    invalid_import = client.post(
+        "/api/admin/devices/import",
+        json={"devices": [{"id": "invalid-lat", "name": "غير صالح", "area": "", "lat": 95, "lng": 44.0}]},
+        headers=csrf_headers(),
+    )
+    assert invalid_import.status_code == 422
+    assert len(client.get("/devices.json").json()) == 3
+
     audit = client.get("/api/admin/audit")
     assert audit.status_code == 200
     assert any(row["action"] == "device_updated" for row in audit.json())
+    assert any(row["action"] == "devices_imported" for row in audit.json())
 
     assert client.post("/api/auth/logout", headers=csrf_headers()).status_code == 200
     assert client.get("/api/admin/devices").status_code == 401
@@ -154,6 +240,15 @@ def run() -> None:
         json={"name": "جهاز ثانٍ", "area": "المبنى", "lat": 32.37, "lng": 44.10},
         headers=csrf_headers(),
     ).status_code == 201
+    assert client.post(
+        "/api/admin/devices/import",
+        json={
+            "devices": [
+                {"id": "device-admin-import", "name": "استيراد مسؤول الأجهزة", "area": "", "lat": 32.39, "lng": 44.12}
+            ]
+        },
+        headers=csrf_headers(),
+    ).status_code == 200
 
     print("SMOKE TEST PASSED")
 

@@ -83,6 +83,13 @@
             <div class="row"><button class="primary write-device" type="submit">💾 حفظ في الخادم</button><button type="button" id="clearDeviceBtn">مسح</button></div>
             <div class="mut">بعد الحفظ يظهر التغيير فورًا لجميع الموظفين دون تصدير أو رفع ملف.</div>
           </form>
+          <div class="card grid">
+            <div class="item-head"><h2>النسخة الاحتياطية للمواقع</h2><a href="/devices.json" target="_blank" rel="noopener" style="color:var(--mut);font-size:12px">عرض JSON</a></div>
+            <div class="row"><button type="button" id="exportDevicesBtn">⬇️ تنزيل نسخة JSON</button><button type="button" id="importDevicesBtn" class="write-device">⬆️ استيراد ودمج</button></div>
+            <input id="importDevicesFile" type="file" accept=".json,application/json" hidden>
+            <div class="mut">الاستيراد يحدّث الأجهزة ذات المعرّف نفسه ويضيف الأجهزة المفقودة، ولا يحذف أي جهاز موجود.</div>
+            <div id="backupStatus" class="mut"></div>
+          </div>
           <div class="card"><div class="item-head"><h2>الأجهزة المسجلة</h2><a href="/devices.json" target="_blank" style="color:var(--mut);font-size:12px">عرض JSON</a></div><div class="list" id="deviceList"></div></div>
         </aside>
       </div>
@@ -126,7 +133,7 @@
   <script>
     const DEFAULT_TILE_URL="https://tile.openstreetmap.org/{z}/{x}/{y}.png";
     const roleLabels={super_admin:"مدير عام",device_admin:"مسؤول أجهزة",viewer:"مشاهدة فقط"};
-    const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",admin_password_recovery:"استعادة كلمة مرور المدير",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
+    const actionLabels={login_success:"تسجيل دخول",login_failed:"محاولة دخول فاشلة",logout:"تسجيل خروج",device_created:"إضافة جهاز",device_updated:"تعديل جهاز",device_deleted:"حذف جهاز",devices_imported:"استيراد نسخة الأجهزة",user_created:"إنشاء مستخدم",user_updated:"تعديل مستخدم",user_password_reset:"إعادة ضبط كلمة مرور",password_changed:"تغيير كلمة المرور",admin_password_recovery:"استعادة كلمة مرور المدير",bootstrap_admin:"إنشاء المدير الأول",seed_devices:"استيراد الأجهزة الأولية"};
     let currentUser=null,devices=[],editingDeviceId=null,map,deviceLayer,tempMarker,pickMode=false;
     const loginOverlay=document.getElementById("loginOverlay"),appEl=document.getElementById("app"),forceOverlay=document.getElementById("forcePasswordOverlay");
 
@@ -211,6 +218,35 @@
     document.getElementById("pickBtn").onclick=()=>{pickMode=true;setMessage("deviceStatus","اضغط على الخريطة لتحديد موقع الجهاز.","warn");};
     document.getElementById("gpsBtn").onclick=()=>{if(!navigator.geolocation){setMessage("deviceStatus","المتصفح لا يدعم GPS.","bad");return}setMessage("deviceStatus","جارِ التقاط الموقع...","warn");navigator.geolocation.getCurrentPosition(pos=>{setCoordinates(pos.coords.latitude,pos.coords.longitude);setMessage("deviceStatus",`تم التقاط الموقع بدقة تقارب ${Math.round(pos.coords.accuracy||0)}م.`,"ok");},()=>setMessage("deviceStatus","تعذر التقاط الموقع؛ تحقق من إذن GPS.","bad"),{enableHighAccuracy:true,timeout:15000,maximumAge:0});};
     document.getElementById("centerBtn").onclick=centerMap;document.getElementById("reloadDevicesBtn").onclick=loadDevices;document.getElementById("clearDeviceBtn").onclick=clearDeviceForm;
+
+    function backupFilename(){return `biometric_devices_backup_${new Date().toISOString().replace(/[:.]/g,"-")}.json`;}
+    document.getElementById("exportDevicesBtn").onclick=async()=>{
+      try{
+        const latest=await api("/api/admin/devices");
+        const backup={format:"biometric-devices-backup",version:1,exported_at:new Date().toISOString(),devices:latest.map(({id,name,area,lat,lng})=>({id,name,area:area||"",lat,lng}))};
+        const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"}));
+        const link=document.createElement("a");link.href=url;link.download=backupFilename();document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        setMessage("backupStatus",`تم تنزيل نسخة تحتوي ${latest.length} جهازًا. احتفظ بها في مكان آمن.`,"ok");
+      }catch(error){setMessage("backupStatus",error.message,"bad");}
+    };
+    document.getElementById("importDevicesBtn").onclick=()=>document.getElementById("importDevicesFile").click();
+    document.getElementById("importDevicesFile").onchange=async event=>{
+      const input=event.target,file=input.files?.[0];if(!file)return;
+      try{
+        if(file.size>2*1024*1024)throw new Error("حجم ملف النسخة أكبر من 2 ميغابايت.");
+        const parsed=JSON.parse(await file.text()),items=Array.isArray(parsed)?parsed:parsed?.devices;
+        if(!Array.isArray(items)||items.length===0)throw new Error("الملف لا يحتوي قائمة أجهزة صالحة.");
+        if(items.length>5000)throw new Error("الملف يحتوي أكثر من 5000 جهاز.");
+        const normalized=items.map(item=>({id:item?.id,name:item?.name,area:item?.area||"",lat:Number(item?.lat),lng:Number(item?.lng)}));
+        if(normalized.some(item=>typeof item.id!=="string"||!item.id.trim()||typeof item.name!=="string"||!item.name.trim()||!Number.isFinite(item.lat)||!Number.isFinite(item.lng)))throw new Error("بعض الأجهزة تفتقد المعرّف أو الاسم أو الإحداثيات الصحيحة.");
+        if(!confirm(`سيتم دمج ${normalized.length} جهازًا من النسخة الاحتياطية. لن يُحذف أي جهاز موجود. هل تريد المتابعة؟`))return;
+        setMessage("backupStatus","جارِ فحص النسخة واستيرادها...","warn");
+        const result=await api("/api/admin/devices/import",{method:"POST",body:JSON.stringify({devices:normalized})});
+        setMessage("backupStatus",`اكتمل الاستيراد: أضيف ${result.created}، حُدّث ${result.updated}، دون تغيير ${result.unchanged}.`,"ok");
+        await loadDevices();
+      }catch(error){setMessage("backupStatus",error instanceof SyntaxError?"ملف JSON غير صالح أو تالف.":error.message,"bad");}
+      finally{input.value="";}
+    };
 
     async function loadUsers(){
       if(currentUser.role!=="super_admin")return;try{const users=await api("/api/admin/users"),list=document.getElementById("userList");list.innerHTML="";

@@ -52,6 +52,7 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").strip().lower() not in {"0", "fa
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 VALID_ROLES = {"super_admin", "device_admin", "viewer"}
 MIN_PASSWORD_LENGTH = 8
+MAX_DEVICE_IMPORT = 5000
 
 
 def utcnow() -> datetime:
@@ -159,6 +160,19 @@ class DeviceOut(DeviceBody):
     id: str
     created_at: datetime
     updated_at: datetime
+
+
+class DeviceImportItem(DeviceBody):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def clean_id(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class DeviceImportBody(BaseModel):
+    devices: list[DeviceImportItem] = Field(min_length=1, max_length=MAX_DEVICE_IMPORT)
 
 
 class UserCreate(BaseModel):
@@ -465,7 +479,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.5.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.6.0", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
@@ -624,6 +638,64 @@ def create_device(
     db.commit()
     db.refresh(device)
     return device
+
+
+@app.post("/api/admin/devices/import")
+def import_devices(
+    body: DeviceImportBody,
+    auth: AuthContext = Depends(require_roles("super_admin", "device_admin", write=True)),
+    db: DbSession = Depends(db_session),
+):
+    imported_ids = [item.id for item in body.devices]
+    if len(imported_ids) != len(set(imported_ids)):
+        raise HTTPException(status_code=400, detail="ملف النسخة يحتوي معرّف جهاز مكررًا.")
+
+    existing_by_id = {device.id: device for device in db.scalars(select(Device)).all()}
+    created = 0
+    updated = 0
+    unchanged = 0
+
+    for item in body.devices:
+        device = existing_by_id.get(item.id)
+        if device is None:
+            device = Device(
+                id=item.id,
+                name=item.name,
+                area=item.area,
+                lat=item.lat,
+                lng=item.lng,
+                created_by=auth.user.id,
+                updated_by=auth.user.id,
+            )
+            db.add(device)
+            existing_by_id[item.id] = device
+            created += 1
+            continue
+
+        before = (device.name, device.area, device.lat, device.lng)
+        after = (item.name, item.area, item.lat, item.lng)
+        if before == after:
+            unchanged += 1
+            continue
+
+        device.name = item.name
+        device.area = item.area
+        device.lat = item.lat
+        device.lng = item.lng
+        device.updated_by = auth.user.id
+        device.updated_at = utcnow()
+        updated += 1
+
+    result = {
+        "ok": True,
+        "total": len(body.devices),
+        "created": created,
+        "updated": updated,
+        "unchanged": unchanged,
+    }
+    audit(db, auth.user, "devices_imported", "device_backup", "", result)
+    db.commit()
+    return result
 
 
 @app.put("/api/admin/devices/{device_id}", response_model=DeviceOut)
