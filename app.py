@@ -52,6 +52,7 @@ SESSION_COOKIE = "biometric_session"
 CSRF_COOKIE = "biometric_csrf"
 SESSION_HOURS = max(1, int(os.getenv("SESSION_HOURS", "12")))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").strip().lower() not in {"0", "false", "no"}
+EMPLOYEE_LAUNCHER_ORIGIN = os.getenv("EMPLOYEE_LAUNCHER_ORIGIN", "https://ahaw26.github.io").strip().rstrip("/")
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 VALID_ROLES = {"super_admin", "device_admin", "viewer"}
 MIN_PASSWORD_LENGTH = 8
@@ -629,7 +630,7 @@ def initialize_database() -> None:
 
 
 initialize_database()
-app = FastAPI(title="خريطة أجهزة البصمة", version="2.7.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="خريطة أجهزة البصمة", version="2.7.1", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
@@ -672,6 +673,13 @@ def admin_page():
 @app.get("/health")
 def health():
     return {"status": "ok", "version": app.version}
+
+
+@app.get("/api/ready")
+def employee_launcher_readiness(response: Response):
+    response.headers["Access-Control-Allow-Origin"] = EMPLOYEE_LAUNCHER_ORIGIN
+    response.headers["Vary"] = "Origin"
+    return {"status": "ok", "version": app.version, "target": "/"}
 
 
 @app.get("/api/config")

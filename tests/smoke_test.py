@@ -33,7 +33,13 @@ def csrf_headers() -> dict[str, str]:
 def run() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "2.7.0"
+    assert health.json()["version"] == "2.7.1"
+
+    ready = client.get("/api/ready", headers={"Origin": "https://ahaw26.github.io"})
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ok", "version": "2.7.1", "target": "/"}
+    assert ready.headers["access-control-allow-origin"] == "https://ahaw26.github.io"
+    assert ready.headers["cache-control"] == "no-store"
 
     public_page = client.get("/")
     assert public_page.status_code == 200
