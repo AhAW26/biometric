@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https://biometric-map.onrender.com; img-src data:">
+  <title>جاري فتح خريطة أجهزة البصمة</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07111f;--card:#0d1c30;--line:#1e3554;--text:#eef5ff;--muted:#a9b9d0;--blue:#3b82f6;--cyan:#22d3ee;--ok:#63e6a6}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:22px;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;background:radial-gradient(circle at 50% 15%,#123158 0,transparent 38%),linear-gradient(160deg,#050b14,#07111f 55%,#09182a);color:var(--text)}
+    .shell{width:min(520px,100%);text-align:center}
+    .card{position:relative;overflow:hidden;padding:34px 24px 28px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(145deg,rgba(18,42,70,.96),rgba(8,22,39,.98));box-shadow:0 28px 70px rgba(0,0,0,.42)}
+    .card::before{content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,transparent,var(--cyan),var(--blue),transparent)}
+    .map-mark{position:relative;width:108px;height:108px;margin:0 auto 24px;display:grid;place-items:center}
+    .pulse{position:absolute;inset:10px;border:2px solid rgba(34,211,238,.52);border-radius:50%;animation:pulse 2s ease-out infinite}
+    .pulse:nth-child(2){animation-delay:.7s}
+    .pin{position:relative;z-index:2;width:58px;height:58px;display:grid;place-items:center;border-radius:50% 50% 50% 8px;transform:rotate(-45deg);background:linear-gradient(135deg,var(--cyan),var(--blue));box-shadow:0 10px 28px rgba(34,211,238,.3)}
+    .pin::after{content:"";width:19px;height:19px;border-radius:50%;background:#eaffff;box-shadow:inset 0 0 0 5px rgba(59,130,246,.34)}
+    h1{font-size:22px;margin:0 0 10px;line-height:1.5}
+    .lead{font-size:16px;margin:0;color:#d8e7fb;line-height:1.8}
+    .status{min-height:48px;margin:15px auto 18px;color:var(--muted);font-size:13px;line-height:1.8}
+    .track{height:7px;border-radius:999px;background:#091525;border:1px solid #17304e;overflow:hidden}
+    .bar{width:42%;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--blue),var(--cyan));animation:loading 1.55s ease-in-out infinite}
+    .bar.done{width:100%;animation:none;background:var(--ok);transition:width .35s ease}
+    .hint{margin:15px 0 0;color:#7f94af;font-size:11px;line-height:1.7}
+    button{display:none;width:100%;margin-top:16px;padding:12px 16px;border:0;border-radius:12px;background:var(--blue);color:white;font:inherit;font-weight:700;cursor:pointer}
+    button.visible{display:block}
+    .brand{margin-top:16px;color:#647995;font-size:11px}
+    @keyframes pulse{0%{transform:scale(.55);opacity:.9}100%{transform:scale(1.45);opacity:0}}
+    @keyframes loading{0%{transform:translateX(145%)}50%{transform:translateX(-35%)}100%{transform:translateX(-145%)}}
+    @media(prefers-reduced-motion:reduce){.pulse,.bar{animation-duration:3s}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="card" aria-labelledby="loadingTitle">
+      <div class="map-mark" aria-hidden="true"><span class="pulse"></span><span class="pulse"></span><span class="pin"></span></div>
+      <h1 id="loadingTitle">خريطة أجهزة البصمة</h1>
+      <p class="lead">جاري تحميل بيانات الموقع، يرجى الانتظار…</p>
+      <div class="status" id="statusText" role="status" aria-live="polite">يتم الآن تشغيل الخدمة وتحميل مواقع الأجهزة.</div>
+      <div class="track" aria-hidden="true"><div class="bar" id="progressBar"></div></div>
+      <p class="hint">ستفتح الخريطة تلقائيًا عند اكتمال التحميل، ولا تحتاج إلى الضغط على أي شيء.</p>
+      <button type="button" id="retryBtn">إعادة المحاولة</button>
+    </section>
+    <div class="brand">نظام تحديد مواقع أجهزة البصمة</div>
+  </main>
+
+  <noscript>يجب تفعيل JavaScript لفتح خريطة الأجهزة.</noscript>
+  <script>
+    const READY_URL="https://biometric-map.onrender.com/api/ready";
+    const TARGET_URL="https://biometric-map.onrender.com/";
+    const statusText=document.getElementById("statusText"),progressBar=document.getElementById("progressBar"),retryBtn=document.getElementById("retryBtn");
+    let startedAt=Date.now(),timer=null,finished=false;
+
+    function updateWaitingMessage(){
+      const seconds=Math.floor((Date.now()-startedAt)/1000);
+      if(seconds>=120){statusText.textContent="استغرق التشغيل وقتًا أطول من المعتاد. يمكنك إعادة المحاولة.";retryBtn.classList.add("visible");}
+      else if(seconds>=60)statusText.textContent="الخدمة ما زالت قيد التشغيل؛ ستفتح الخريطة فور جاهزيتها.";
+      else if(seconds>=20)statusText.textContent="قد يستغرق تشغيل الخدمة لأول مرة نحو دقيقة.";
+    }
+
+    async function checkReadiness(){
+      if(finished)return;
+      updateWaitingMessage();
+      const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),9000);
+      try{
+        const response=await fetch(`${READY_URL}?t=${Date.now()}`,{cache:"no-store",credentials:"omit",signal:controller.signal});
+        if(!response.ok)throw new Error("not ready");
+        const data=await response.json();
+        if(data.status!=="ok")throw new Error("not ready");
+        finished=true;clearTimeout(timer);progressBar.classList.add("done");statusText.textContent="اكتمل التحميل، جارِ فتح الخريطة…";
+        setTimeout(()=>location.replace(TARGET_URL),650);
+        return;
+      }catch{}
+      finally{clearTimeout(timeout);}
+      timer=setTimeout(checkReadiness,2500);
+    }
+
+    retryBtn.onclick=()=>{finished=false;startedAt=Date.now();retryBtn.classList.remove("visible");statusText.textContent="يتم الآن تشغيل الخدمة وتحميل مواقع الأجهزة.";clearTimeout(timer);checkReadiness();};
+    checkReadiness();
+  </script>
+</body>
+</html>
